@@ -1,1 +1,48 @@
+name: Create Islamic Videos
 
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 5 * * *"
+    - cron: "0 9 * * *"
+    - cron: "0 16 * * *"
+
+jobs:
+  create-video:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Create video
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          SUNNAH_API_KEY: ${{ secrets.SUNNAH_API_KEY }}
+        run: |
+          python create_video.py
+
+      - name: Upload generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: islamic-video
+          path: output/
