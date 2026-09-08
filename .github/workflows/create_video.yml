@@ -4,45 +4,139 @@ on:
   workflow_dispatch:
 
   schedule:
+    # UAE 9:00 AM = 05:00 UTC
     - cron: "0 5 * * *"
+
+    # UAE 1:00 PM = 09:00 UTC
     - cron: "0 9 * * *"
+
+    # UAE 8:00 PM = 16:00 UTC
     - cron: "0 16 * * *"
 
+
+# Prevent two video jobs from running at the same time.
+concurrency:
+  group: islamic-video-generator
+  cancel-in-progress: false
+
+
+permissions:
+  contents: write
+
+
 jobs:
+
   create-video:
 
     runs-on: ubuntu-latest
 
     steps:
 
+      # --------------------------------------------------------
+      # 1. Checkout repository
+      # --------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install FFmpeg
+
+      # --------------------------------------------------------
+      # 2. Install FFmpeg and Arabic/Urdu shaping libraries
+      # --------------------------------------------------------
+      - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y \
+            ffmpeg \
+            libfribidi-dev \
+            libharfbuzz-dev
 
-      - name: Install Python
+
+      # --------------------------------------------------------
+      # 3. Install Python
+      # --------------------------------------------------------
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+
+      # --------------------------------------------------------
+      # 4. Install Python dependencies
+      # --------------------------------------------------------
+      - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+
+      # --------------------------------------------------------
+      # 5. Install Playwright browser
+      # --------------------------------------------------------
+      - name: Install Playwright Chromium
+        run: |
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Create video
+
+      # --------------------------------------------------------
+      # 6. Verify required files
+      # --------------------------------------------------------
+      - name: Verify project files
+        run: |
+          test -f create_video.py
+          test -f used_hadith.json
+          test -f fonts/NotoNaskhArabic-Regular.ttf
+          test -f audio/islamic_background.mp3
+
+          echo "All required files are present."
+
+
+      # --------------------------------------------------------
+      # 7. Create video
+      # --------------------------------------------------------
+      - name: Create Islamic video
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           SUNNAH_API_KEY: ${{ secrets.SUNNAH_API_KEY }}
         run: |
           python create_video.py
 
+
+      # --------------------------------------------------------
+      # 8. Upload generated video + metadata
+      # --------------------------------------------------------
       - name: Upload generated files
         uses: actions/upload-artifact@v4
         with:
-          name: islamic-video
-          path: output/
+          name: islamic-video-${{ github.run_number }}
+          path: |
+            output/
+            work/sunnah_urdu_extraction_failed.png
+          if-no-files-found: warn
+
+
+      # --------------------------------------------------------
+      # 9. Save used_hadith.json permanently
+      # --------------------------------------------------------
+      - name: Save used Hadith list
+        run: |
+
+          git config user.name "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add used_hadith.json
+
+          if git diff --cached --quiet; then
+            echo "No used Hadith changes to commit."
+          else
+
+            git commit \
+              -m "Update used Hadith list"
+
+            git push
+
+          fi
