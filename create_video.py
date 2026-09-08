@@ -2,718 +2,419 @@ import os
 import re
 import json
 import random
+import time
 import subprocess
 from pathlib import Path
-from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import requests
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from PIL import Image, ImageDraw, ImageFont
+from playwright.sync_api import sync_playwright
 
 import arabic_reshaper
 from bidi.algorithm import get_display
 
 
 # ============================================================
-# CONFIGURATION
+# SETTINGS
 # ============================================================
+
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 WIDTH = 1080
 HEIGHT = 1920
+VIDEO_SECONDS = 75
 
-VIDEO_DURATION = 75
-FPS = 30
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "output"
+WORK_DIR = BASE_DIR / "work"
 
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
-SUNNAH_API_KEY = os.getenv("SUNNAH_API_KEY")
-
-SUNNAH_API_BASE = "https://api.sunnah.com/v1"
-SUNNAH_WEB_BASE = "https://sunnah.com"
-
-OUTPUT_DIR = Path("output")
-WORK_DIR = Path("work")
-AUDIO_FILE = Path("audio/islamic_background.mp3")
-FONT_DIR = Path("fonts")
-USED_FILE = Path("used_hadith.json")
+AUDIO_FILE = BASE_DIR / "audio" / "islamic_background.mp3"
+FONT_FILE = BASE_DIR / "fonts" / "NotoNaskhArabic-Regular.ttf"
+USED_FILE = BASE_DIR / "used_hadith.json"
 
 OUTPUT_DIR.mkdir(exist_ok=True)
 WORK_DIR.mkdir(exist_ok=True)
 
-# We intentionally restrict the generator to these two collections.
+# Only these two collections
 COLLECTIONS = {
-    "bukhari": "Sahih al-Bukhari",
-    "muslim": "Sahih Muslim",
+    "bukhari": {
+        "name": "Sahih al-Bukhari",
+        "max_number": 7563,
+    },
+    "muslim": {
+        "name": "Sahih Muslim",
+        "max_number": 7500,
+    },
 }
 
-PEXELS_SEARCH_TERMS = [
-    "mosque",
-    "Islamic mosque",
-    "Islamic architecture",
-    "Quran mosque",
-    "masjid",
-    "Muslim prayer",
-    "Islamic sunset",
-    "Islamic night",
-    "mosque interior",
-    "Kaaba",
-]
-
-REQUEST_TIMEOUT = 60
-
 
 # ============================================================
-# LOGGING
+# USED HADITH
 # ============================================================
 
-def log(message):
-    print(f"[INFO] {message}")
-
-
-# ============================================================
-# JSON / USED HADITH
-# ============================================================
-
-def load_used():
+def load_used_hadith():
     if not USED_FILE.exists():
-        return {}
+        return set()
 
     try:
-        data = json.loads(
-            USED_FILE.read_text(encoding="utf-8")
-        )
+        data = json.loads(USED_FILE.read_text(encoding="utf-8"))
+
+        if isinstance(data, list):
+            return set(data)
 
         if isinstance(data, dict):
-            return data
+            return set(data.keys())
 
-    except Exception as exc:
-        log(f"Could not read used_hadith.json: {exc}")
+    except Exception:
+        pass
 
-    return {}
+    return set()
 
 
-def save_used(data):
+def save_used_hadith(used):
+    data = {item: True for item in sorted(used)}
+
     USED_FILE.write_text(
-        json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2
-        ),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
 
 # ============================================================
-# SUNNAH.COM API
+# SUNNAH.COM
 # ============================================================
 
-def sunnah_headers():
-    if not SUNNAH_API_KEY:
-        raise RuntimeError(
-            "SUNNAH_API_KEY is missing. "
-            "Add your Sunnah.com API key to GitHub Secrets."
-        )
-
-    return {
-        "X-API-Key": SUNNAH_API_KEY,
-        "Accept": "application/json",
-        "User-Agent": "IslamicVideoGenerator/1.0"
-    }
-
-
-def get_valid_random_hadith():
+def get_random_hadith_page():
     """
-    Get a real Hadith reference from the official Sunnah.com API.
+    Selects a random individual Hadith page from Bukhari or Muslim.
 
-    We do NOT generate or invent a Hadith number.
-
-    The API result gives us the canonical collection and
-    Hadith number. The actual Urdu text is then obtained
-    from the corresponding Sunnah.com webpage.
+    No API key is used.
     """
 
-    used = load_used()
+    used = load_used_hadith()
 
-    # Try several API pages and randomly choose from returned
-    # verified/available records.
-    for attempt in range(30):
+    collections = list(COLLECTIONS.keys())
+    random.shuffle(collections)
 
-        collection = random.choice(
-            list(COLLECTIONS.keys())
-        )
+    for collection in collections:
 
-        # Get collection data through the official API.
-        # The API allows up to 100 records per page.
-        page_number = random.randint(1, 100)
+        max_number = COLLECTIONS[collection]["max_number"]
 
-        url = (
-            f"{SUNNAH_API_BASE}/hadiths"
-        )
+        for attempt in range(30):
 
-        params = {
-            "collection": collection,
-            "limit": 100,
-            "page": page_number,
-        }
+            number = random.randint(1, max_number)
 
-        log(
-            f"Checking Sunnah.com API: "
-            f"{collection}, page {page_number}"
-        )
-
-        response = requests.get(
-            url,
-            headers=sunnah_headers(),
-            params=params,
-            timeout=REQUEST_TIMEOUT
-        )
-
-        if response.status_code == 404:
-            continue
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        records = data.get("data", [])
-
-        if not records:
-            continue
-
-        random.shuffle(records)
-
-        for record in records:
-
-            record_collection = (
-                record.get("collection")
-                or collection
-            )
-
-            number = record.get("hadithNumber")
-
-            if not number:
-                continue
-
-            key = (
-                f"{record_collection}:"
-                f"{number}"
-            )
+            key = f"{collection}:{number}"
 
             if key in used:
                 continue
 
-            if record_collection not in COLLECTIONS:
-                continue
+            url = f"https://sunnah.com/{collection}:{number}"
 
-            return {
-                "collection": record_collection,
-                "number": str(number),
-            }
+            print(f"Trying Hadith: {url}")
+
+            try:
+                with sync_playwright() as p:
+
+                    browser = p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox"
+                        ]
+                    )
+
+                    page = browser.new_page(
+                        viewport={
+                            "width": 1400,
+                            "height": 1200
+                        }
+                    )
+
+                    page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=60000
+                    )
+
+                    page.wait_for_timeout(2500)
+
+                    # Check that the page is actually a Hadith page
+                    body_text = page.locator("body").inner_text(
+                        timeout=15000
+                    )
+
+                    if "Reference" not in body_text:
+                        browser.close()
+                        continue
+
+                    # Click Urdu language
+                    try:
+                        urdu_button = page.get_by_text(
+                            "اردو",
+                            exact=True
+                        ).first
+
+                        if urdu_button.count() > 0:
+                            urdu_button.click(timeout=10000)
+                            page.wait_for_timeout(2500)
+
+                    except Exception:
+                        pass
+
+                    # Get full page text after Urdu selection
+                    text = page.locator("body").inner_text(
+                        timeout=15000
+                    )
+
+                    browser.close()
+
+                    reference = extract_reference(text)
+
+                    if not reference:
+                        continue
+
+                    urdu_text = extract_urdu_hadith(text)
+
+                    if not urdu_text:
+                        continue
+
+                    print("Reference:", reference)
+                    print("Urdu Hadith found.")
+
+                    return {
+                        "key": key,
+                        "collection": collection,
+                        "number": number,
+                        "reference": reference,
+                        "url": url,
+                        "urdu": urdu_text,
+                    }
+
+            except Exception as e:
+                print("Sunnah error:", e)
+
+            time.sleep(1)
 
     raise RuntimeError(
-        "Could not find an unused Hadith from the "
-        "official Sunnah.com API."
+        "Could not find a new Hadith from Sunnah.com."
     )
 
 
-# ============================================================
-# URDU EXTRACTION
-# ============================================================
+def extract_reference(text):
+    """
+    Finds the official reference displayed by Sunnah.com.
+    Example:
+    Sahih al-Bukhari 54
+    Sahih Muslim 2564
+    """
+
+    patterns = [
+        r"Reference\s*:\s*(Sahih al-Bukhari\s+\d+)",
+        r"Reference\s*:\s*(Sahih Muslim\s+\d+)",
+        r"(Sahih al-Bukhari\s+\d+)",
+        r"(Sahih Muslim\s+\d+)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            flags=re.IGNORECASE
+        )
+
+        if match:
+            return match.group(1).strip()
+
+    return None
+
 
 def is_urdu_text(text):
-    """
-    Conservative Urdu detection.
-
-    We never translate anything.
-    This only helps identify text already present on
-    Sunnah.com after selecting Urdu.
-    """
-
     if not text:
         return False
 
-    text = re.sub(r"\s+", " ", text).strip()
+    # Urdu/Arabic Unicode range
+    arabic_chars = re.findall(
+        r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]",
+        text
+    )
 
-    if len(text) < 30:
+    if len(arabic_chars) < 20:
         return False
 
-    # Characters strongly associated with Urdu.
-    urdu_specific = set(
-        "ٹڈڑںھےؤئۃگپچژے"
+    # Urdu-specific characters
+    urdu_chars = re.findall(
+        r"[ٹڈڑںھہۃےی]",
+        text
     )
 
-    specific_count = sum(
-        1 for char in text
-        if char in urdu_specific
-    )
-
-    # Common Urdu words.
-    common_words = [
-        "ہے",
-        "ہیں",
-        "سے",
-        "نے",
-        "اور",
-        "کے",
-        "کی",
-        "کا",
-        "ایک",
-        "جو",
-        "یہ",
-        "وہ",
-        "میں",
-        "پر",
-        "کو",
-        "تھا",
-        "تھی",
-        "تھے",
-        "اللہ",
-        "رسول",
-        "فرمایا",
-    ]
-
-    common_count = sum(
-        1 for word in common_words
-        if word in text
-    )
-
-    return (
-        specific_count >= 1
-        or common_count >= 2
-    )
+    return len(urdu_chars) >= 1
 
 
 def clean_hadith_text(text):
+    text = re.sub(r"\s+", " ", text)
+    text = text.strip()
+
+    # Remove obvious UI labels
+    remove_patterns = [
+        r"^اردو$",
+        r"^English$",
+        r"^Bangla$",
+        r"^Share$",
+        r"^Copy$",
+        r"^Report Error$",
+    ]
+
+    for pattern in remove_patterns:
+        text = re.sub(
+            pattern,
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
+def extract_urdu_hadith(text):
     """
-    Clean only formatting/HTML artifacts.
-    The actual words are NOT translated or rewritten.
+    Extract Urdu text conservatively.
+
+    We look for blocks containing Urdu characters and reject
+    navigation/UI content.
     """
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
+    lines = [
+        clean_hadith_text(line)
+        for line in text.splitlines()
+    ]
 
-    # Remove accidental UI labels.
-    text = re.sub(
-        r"^(Translation|ترجمہ)\s*:?\s*",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
+    candidates = []
 
-    return text.strip()
+    for line in lines:
 
-
-def extract_urdu_from_page(page, collection, number):
-    """
-    Extract the Urdu Hadith from the exact Sunnah.com page.
-
-    Priority:
-    1. Urdu/language-specific DOM elements.
-    2. Hadith container around the exact reference.
-    3. Conservative Urdu candidates.
-
-    If the script cannot confidently find Urdu text,
-    it FAILS instead of translating or guessing.
-    """
-
-    collection_name = COLLECTIONS[collection]
-
-    reference_text = (
-        f"{collection_name} {number}"
-    )
-
-    candidates = page.evaluate(
-        """
-        (referenceText) => {
-
-            function normalize(value) {
-                return (value || "")
-                    .replace(/\\\\s+/g, " ")
-                    .trim();
-            }
-
-            function collect(root) {
-
-                const result = [];
-
-                const selectors = [
-                    '[lang="ur"]',
-                    '[lang="ur-PK"]',
-                    '[data-lang="ur"]',
-                    '[data-language="ur"]',
-                    '[class*="urdu"]',
-                    '[id*="urdu"]'
-                ];
-
-                for (const selector of selectors) {
-
-                    for (const element of root.querySelectorAll(selector)) {
-
-                        const text = normalize(
-                            element.innerText ||
-                            element.textContent
-                        );
-
-                        if (text.length >= 30) {
-                            result.push(text);
-                        }
-                    }
-                }
-
-                return result;
-            }
-
-            // First try explicit Urdu elements.
-            let direct = collect(document);
-
-            if (direct.length > 0) {
-                return direct;
-            }
-
-            // Find the exact Hadith reference.
-            const elements = Array.from(
-                document.querySelectorAll(
-                    "a, span, div, p, h1, h2, h3, h4"
-                )
-            );
-
-            const referenceElement = elements.find(
-                element =>
-                    normalize(
-                        element.innerText ||
-                        element.textContent
-                    ) === referenceText
-            );
-
-            if (!referenceElement) {
-                return [];
-            }
-
-            let container = referenceElement;
-
-            // Move upward until we reach the Hadith block.
-            for (let i = 0; i < 8 && container; i++) {
-
-                const descendants = Array.from(
-                    container.querySelectorAll(
-                        "p, div, span"
-                    )
-                );
-
-                const texts = descendants
-                    .map(element =>
-                        normalize(
-                            element.innerText ||
-                            element.textContent
-                        )
-                    )
-                    .filter(text => text.length >= 30);
-
-                if (texts.length > 0) {
-                    direct = direct.concat(texts);
-                }
-
-                container = container.parentElement;
-            }
-
-            return direct;
-        }
-        """,
-        reference_text
-    )
-
-    # Python-side conservative filtering.
-    filtered = []
-
-    for text in candidates:
-
-        text = clean_hadith_text(text)
-
-        if not is_urdu_text(text):
+        if len(line) < 30:
             continue
 
-        # Ignore obvious navigation/reference text.
-        lower = text.lower()
+        if len(line) > 2500:
+            continue
 
-        ignored = [
-            "language",
+        if not is_urdu_text(line):
+            continue
+
+        # Reject obvious navigation/UI
+        lower = line.lower()
+
+        blocked = [
             "reference",
             "in-book reference",
-            "select collections",
-            "search",
             "report error",
+            "sunnah.com",
+            "english",
+            "bangla",
+            "search",
+            "home",
             "share",
             "copy",
         ]
 
-        if any(item in lower for item in ignored):
+        if any(word in lower for word in blocked):
             continue
 
-        filtered.append(text)
+        candidates.append(line)
 
-    # Remove duplicates.
-    filtered = list(dict.fromkeys(filtered))
-
-    if not filtered:
+    if not candidates:
         return None
 
-    # Prefer medium/long Hadith-sized text.
-    # Very huge containers are usually entire page sections.
-    filtered.sort(
-        key=lambda value: (
-            0 if len(value) > 2500 else 1,
-            abs(len(value) - 700)
-        )
+    # Usually the Hadith body is one of the longest Urdu blocks.
+    candidates.sort(
+        key=lambda x: len(x),
+        reverse=True
     )
 
-    selected = filtered[0]
-
-    # Safety check.
-    if len(selected) < 40:
-        return None
-
-    return selected
-
-
-def get_hadith_from_sunnah():
-    """
-    Complete source chain:
-
-        Official Sunnah.com API
-                ↓
-        Valid collection + number
-                ↓
-        Exact Sunnah.com page
-                ↓
-        Urdu language selection
-                ↓
-        Exact Urdu text
-
-    No AI translation.
-    No generated Hadith.
-    """
-
-    selected = get_valid_random_hadith()
-
-    collection = selected["collection"]
-    number = selected["number"]
-
-    url = (
-        f"{SUNNAH_WEB_BASE}/"
-        f"{collection}:{number}"
-    )
-
-    log(
-        f"Selected Sunnah.com Hadith: {url}"
-    )
-
-    with sync_playwright() as playwright:
-
-        browser = playwright.chromium.launch(
-            headless=True
-        )
-
-        context = browser.new_context(
-            viewport={
-                "width": 1440,
-                "height": 1000
-            },
-            locale="ur-PK"
-        )
-
-        page = context.new_page()
-
-        try:
-
-            page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=60000
-            )
-
-            page.wait_for_timeout(2000)
-
-            # Find the Urdu language control.
-            urdu = page.get_by_text(
-                "اردو",
-                exact=True
-            )
-
-            if urdu.count() == 0:
-                raise RuntimeError(
-                    "Sunnah.com Urdu language control "
-                    "was not found."
-                )
-
-            clicked = False
-
-            for i in range(
-                min(urdu.count(), 5)
-            ):
-
-                try:
-
-                    control = urdu.nth(i)
-
-                    if control.is_visible():
-
-                        control.click(
-                            timeout=10000
-                        )
-
-                        clicked = True
-                        break
-
-                except Exception:
-                    continue
-
-            if not clicked:
-                raise RuntimeError(
-                    "Could not select Urdu on Sunnah.com."
-                )
-
-            # Allow language content to load.
-            page.wait_for_timeout(2500)
-
-            # Wait until Urdu-like content exists.
-            try:
-                page.wait_for_function(
-                    """
-                    () => {
-                        const text =
-                            document.body.innerText || "";
-
-                        return /[ٹڈڑںھےؤئۃگپچژے]/.test(text)
-                            && text.length > 500;
-                    }
-                    """,
-                    timeout=15000
-                )
-            except PlaywrightTimeoutError:
-                pass
-
-            urdu_text = extract_urdu_from_page(
-                page,
-                collection,
-                number
-            )
-
-            if not urdu_text:
-
-                # Save diagnostic screenshot for GitHub artifact.
-                screenshot_path = (
-                    WORK_DIR /
-                    "sunnah_urdu_extraction_failed.png"
-                )
-
-                page.screenshot(
-                    path=str(screenshot_path),
-                    full_page=True
-                )
-
-                raise RuntimeError(
-                    "Could not safely extract the Urdu "
-                    "Hadith from Sunnah.com. "
-                    "The workflow stopped rather than "
-                    "guessing or translating the Hadith."
-                )
-
-        finally:
-            browser.close()
-
-    collection_name = COLLECTIONS[collection]
-
-    reference = (
-        f"{collection_name} {number}"
-    )
-
-    return {
-        "collection": collection,
-        "number": number,
-        "text": urdu_text,
-        "reference": reference,
-        "url": url,
-    }
+    return candidates[0]
 
 
 # ============================================================
 # PEXELS
 # ============================================================
 
-def get_pexels_photo():
-
+def download_pexels_image():
     if not PEXELS_API_KEY:
         raise RuntimeError(
             "PEXELS_API_KEY is missing."
         )
 
-    query = random.choice(
-        PEXELS_SEARCH_TERMS
-    )
+    queries = [
+        "mosque",
+        "masjid",
+        "quran",
+        "islamic architecture",
+        "mosque sunset",
+        "islamic background",
+        "kaaba",
+        "medina mosque",
+    ]
 
-    log(
-        f"Searching Pexels: {query}"
-    )
+    query = random.choice(queries)
+
+    print("Pexels search:", query)
+
+    headers = {
+        "Authorization": PEXELS_API_KEY
+    }
+
+    params = {
+        "query": query,
+        "orientation": "portrait",
+        "size": "large",
+        "per_page": 15,
+        "page": random.randint(1, 3),
+    }
 
     response = requests.get(
         "https://api.pexels.com/v1/search",
-        headers={
-            "Authorization": PEXELS_API_KEY
-        },
-        params={
-            "query": query,
-            "orientation": "portrait",
-            "size": "large",
-            "per_page": 40,
-            "page": random.randint(1, 5),
-        },
-        timeout=REQUEST_TIMEOUT
+        headers=headers,
+        params=params,
+        timeout=30
     )
 
     response.raise_for_status()
 
     data = response.json()
 
-    photos = data.get(
-        "photos",
-        []
-    )
+    photos = data.get("photos", [])
 
     if not photos:
         raise RuntimeError(
-            "No Pexels photos found."
+            "No Pexels image found."
         )
 
-    photo = random.choice(
-        photos
-    )
+    photo = random.choice(photos)
 
     image_url = (
         photo.get("src", {}).get("portrait")
         or photo.get("src", {}).get("large2x")
         or photo.get("src", {}).get("large")
-        or photo.get("src", {}).get("original")
     )
 
     if not image_url:
         raise RuntimeError(
-            "Pexels returned a photo without "
-            "a usable image URL."
+            "Pexels did not return an image URL."
         )
 
     image_response = requests.get(
         image_url,
-        timeout=REQUEST_TIMEOUT
+        timeout=60
     )
 
     image_response.raise_for_status()
 
-    image_path = (
-        WORK_DIR /
-        "pexels.jpg"
-    )
+    image_path = WORK_DIR / "background.jpg"
 
     image_path.write_bytes(
         image_response.content
@@ -723,58 +424,17 @@ def get_pexels_photo():
         "path": image_path,
         "photographer": photo.get(
             "photographer",
-            "Pexels"
+            "Unknown"
         ),
         "photographer_url": photo.get(
             "photographer_url",
-            "https://www.pexels.com/"
+            ""
         ),
         "pexels_url": photo.get(
             "url",
-            "https://www.pexels.com/"
+            ""
         ),
     }
-
-
-# ============================================================
-# FONT
-# ============================================================
-
-def find_font():
-
-    possible = [
-        FONT_DIR /
-        "NotoNaskhArabic-Regular.ttf",
-
-        FONT_DIR /
-        "NotoNaskhArabic-Medium.ttf",
-
-        FONT_DIR /
-        "NotoNaskhArabic-Bold.ttf",
-
-        Path(
-            "/usr/share/fonts/truetype/noto/"
-            "NotoNaskhArabic-Regular.ttf"
-        ),
-
-        Path(
-            "/usr/share/fonts/opentype/noto/"
-            "NotoNaskhArabic-Regular.ttf"
-        ),
-    ]
-
-    for font in possible:
-
-        if font.exists():
-            log(
-                f"Using font: {font}"
-            )
-
-            return str(font)
-
-    raise RuntimeError(
-        "Noto Naskh Arabic font not found."
-    )
 
 
 # ============================================================
@@ -782,377 +442,297 @@ def find_font():
 # ============================================================
 
 def shape_urdu(text):
-    """
-    Shape Urdu for correct RTL rendering.
-    This does NOT translate or modify the meaning.
-    """
-
-    reshaped = arabic_reshaper.reshape(
-        text
-    )
-
-    return get_display(
-        reshaped
-    )
+    reshaped = arabic_reshaper.reshape(text)
+    return get_display(reshaped)
 
 
-# ============================================================
-# IMAGE
-# ============================================================
-
-def fit_cover(image, width, height):
-
-    image = image.convert("RGB")
-
-    scale = max(
-        width / image.width,
-        height / image.height
-    )
-
-    new_size = (
-        int(image.width * scale),
-        int(image.height * scale)
-    )
-
-    image = image.resize(
-        new_size,
-        Image.Resampling.LANCZOS
-    )
-
-    left = (
-        image.width - width
-    ) // 2
-
-    top = (
-        image.height - height
-    ) // 2
-
-    return image.crop(
-        (
-            left,
-            top,
-            left + width,
-            top + height
-        )
-    )
-
-
-def create_background(photo_path):
-
-    image = Image.open(
-        photo_path
-    ).convert("RGB")
-
-    # Blurred background.
-    bg = fit_cover(
-        image,
-        WIDTH,
-        HEIGHT
-    )
-
-    bg = bg.filter(
-        ImageFilter.GaussianBlur(25)
-    )
-
-    canvas = bg.copy()
-
-    # Main image.
-    main = fit_cover(
-        image,
-        WIDTH,
-        HEIGHT
-    )
-
-    # Slight dark overlay.
-    overlay = Image.new(
-        "RGBA",
-        (WIDTH, HEIGHT),
-        (0, 0, 0, 70)
-    )
-
-    main = Image.alpha_composite(
-        main.convert("RGBA"),
-        overlay
-    )
-
-    canvas.paste(
-        main.convert("RGB"),
-        (0, 0)
-    )
-
-    return canvas
-
-
-# ============================================================
-# TEXT OVERLAY
-# ============================================================
-
-def wrap_urdu_text(
-    text,
+def wrap_rtl_text(
     draw,
+    text,
     font,
     max_width
 ):
+    """
+    Wrap Urdu text while respecting RTL display.
+    """
 
     words = text.split()
 
     lines = []
-    current = []
+    current = ""
 
     for word in words:
 
-        test_words = (
-            current + [word]
-        )
+        test = (
+            current + " " + word
+        ).strip()
 
-        test_text = shape_urdu(
-            " ".join(test_words)
-        )
+        shaped = shape_urdu(test)
 
         bbox = draw.textbbox(
             (0, 0),
-            test_text,
+            shaped,
             font=font
         )
 
-        width = (
-            bbox[2] - bbox[0]
-        )
+        width = bbox[2] - bbox[0]
 
-        if (
-            width > max_width
-            and current
-        ):
-
-            lines.append(
-                " ".join(current)
-            )
-
-            current = [word]
-
+        if width <= max_width:
+            current = test
         else:
-            current = test_words
+
+            if current:
+                lines.append(current)
+
+            current = word
 
     if current:
-        lines.append(
-            " ".join(current)
-        )
+        lines.append(current)
 
     return lines
 
 
-def create_text_overlay(hadith):
+# ============================================================
+# CREATE IMAGE
+# ============================================================
 
-    font_path = find_font()
+def create_text_image(
+    background_path,
+    hadith_text,
+    reference
+):
+    image = Image.open(
+        background_path
+    ).convert("RGB")
 
-    hadith_font = ImageFont.truetype(
-        font_path,
-        53
+    # Cover the full vertical canvas
+    image_ratio = image.width / image.height
+    target_ratio = WIDTH / HEIGHT
+
+    if image_ratio > target_ratio:
+        # Crop width
+        new_width = int(
+            image.height * target_ratio
+        )
+
+        left = (
+            image.width - new_width
+        ) // 2
+
+        image = image.crop(
+            (
+                left,
+                0,
+                left + new_width,
+                image.height
+            )
+        )
+
+    else:
+        # Crop height
+        new_height = int(
+            image.width / target_ratio
+        )
+
+        top = (
+            image.height - new_height
+        ) // 2
+
+        image = image.crop(
+            (
+                0,
+                top,
+                image.width,
+                top + new_height
+            )
+        )
+
+    image = image.resize(
+        (WIDTH, HEIGHT),
+        Image.Resampling.LANCZOS
     )
 
-    reference_font = ImageFont.truetype(
-        font_path,
-        38
-    )
-
+    # Dark overlay
     overlay = Image.new(
         "RGBA",
-        (WIDTH, HEIGHT),
-        (0, 0, 0, 0)
+        image.size,
+        (0, 0, 0, 105)
     )
 
-    draw = ImageDraw.Draw(
+    image = Image.alpha_composite(
+        image.convert("RGBA"),
         overlay
     )
 
-    # Central panel.
-    panel_x = 60
-    panel_y = 250
-    panel_w = WIDTH - 120
-    panel_h = 1420
+    draw = ImageDraw.Draw(image)
 
-    draw.rounded_rectangle(
-        (
-            panel_x,
-            panel_y,
-            panel_x + panel_w,
-            panel_y + panel_h
-        ),
-        radius=40,
-        fill=(0, 0, 0, 155)
+    font_size = 60
+    reference_size = 42
+
+    font = ImageFont.truetype(
+        str(FONT_FILE),
+        font_size
     )
 
-    # Exact Hadith text.
-    lines = wrap_urdu_text(
-        hadith["text"],
+    reference_font = ImageFont.truetype(
+        str(FONT_FILE),
+        reference_size
+    )
+
+    max_text_width = 880
+
+    lines = wrap_rtl_text(
         draw,
-        hadith_font,
-        WIDTH - 180
+        hadith_text,
+        font,
+        max_text_width
     )
 
-    # Allow more lines rather than cutting the Hadith.
-    if len(lines) > 17:
+    # Limit extreme text length
+    if len(lines) > 12:
+        lines = lines[:12]
 
-        # Reduce font size if needed.
-        hadith_font = ImageFont.truetype(
-            font_path,
-            45
-        )
+    # Calculate total height
+    line_spacing = 20
 
-        lines = wrap_urdu_text(
-            hadith["text"],
-            draw,
-            hadith_font,
-            WIDTH - 180
-        )
+    heights = []
 
-    if len(lines) > 20:
-        raise RuntimeError(
-            "Hadith is too long to fit safely "
-            "inside the video."
-        )
+    for line in lines:
 
-    line_height = 88
-
-    total_height = (
-        len(lines) *
-        line_height
-    )
-
-    start_y = (
-        820 -
-        total_height / 2
-    )
-
-    for index, original_line in enumerate(lines):
-
-        line = shape_urdu(
-            original_line
-        )
+        shaped = shape_urdu(line)
 
         bbox = draw.textbbox(
             (0, 0),
-            line,
-            font=hadith_font
+            shaped,
+            font=font
         )
 
-        line_width = (
-            bbox[2] - bbox[0]
+        heights.append(
+            bbox[3] - bbox[1]
         )
+
+    total_height = (
+        sum(heights)
+        + line_spacing * max(
+            0,
+            len(lines) - 1
+        )
+        + 150
+    )
+
+    start_y = max(
+        250,
+        (HEIGHT - total_height) // 2
+    )
+
+    # Hadith text
+    y = start_y
+
+    for line, line_height in zip(
+        lines,
+        heights
+    ):
+
+        shaped = shape_urdu(line)
+
+        bbox = draw.textbbox(
+            (0, 0),
+            shaped,
+            font=font
+        )
+
+        text_width = bbox[2] - bbox[0]
 
         x = (
-            WIDTH -
-            line_width
-        ) / 2
+            WIDTH - text_width
+        ) // 2
 
-        y = (
-            start_y +
-            index * line_height
+        # Shadow
+        draw.text(
+            (x + 3, y + 3),
+            shaped,
+            font=font,
+            fill=(0, 0, 0, 180)
         )
 
         draw.text(
             (x, y),
-            line,
-            font=hadith_font,
-            fill=(255, 255, 255, 255),
-            stroke_width=2,
-            stroke_fill=(0, 0, 0, 255)
+            shaped,
+            font=font,
+            fill=(255, 255, 255, 255)
         )
 
-    # Exact source reference.
-    reference_text = (
-        "حوالہ: " +
-        hadith["reference"]
-    )
+        y += line_height + line_spacing
 
-    reference_text = shape_urdu(
-        reference_text
+    # Reference
+    ref_text = shape_urdu(
+        "حوالہ: " + reference
     )
 
     bbox = draw.textbbox(
         (0, 0),
-        reference_text,
+        ref_text,
         font=reference_font
     )
 
-    reference_width = (
+    ref_width = (
         bbox[2] - bbox[0]
     )
 
+    ref_x = (
+        WIDTH - ref_width
+    ) // 2
+
+    ref_y = HEIGHT - 260
+
     draw.text(
         (
-            (WIDTH - reference_width) / 2,
-            1460
+            ref_x + 2,
+            ref_y + 2
         ),
-        reference_text,
+        ref_text,
         font=reference_font,
-        fill=(245, 245, 245, 255),
-        stroke_width=2,
-        stroke_fill=(0, 0, 0, 255)
+        fill=(0, 0, 0, 180)
     )
 
-    return overlay
+    draw.text(
+        (ref_x, ref_y),
+        ref_text,
+        font=reference_font,
+        fill=(255, 255, 255, 255)
+    )
+
+    image_path = WORK_DIR / "text_image.png"
+
+    image.convert("RGB").save(
+        image_path,
+        quality=95
+    )
+
+    return image_path
 
 
 # ============================================================
 # VIDEO
 # ============================================================
 
-def make_video(
-    background,
-    text_overlay,
-    output_path
-):
-
-    bg_path = (
-        WORK_DIR /
-        "background.jpg"
+def create_video(image_path):
+    output_path = (
+        OUTPUT_DIR
+        / f"islamic_hadith_{int(time.time())}.mp4"
     )
 
-    text_path = (
-        WORK_DIR /
-        "text_overlay.png"
-    )
-
-    background.save(
-        bg_path,
-        "JPEG",
-        quality=95
-    )
-
-    text_overlay.save(
-        text_path
-    )
-
-    if not AUDIO_FILE.exists():
-        raise RuntimeError(
-            f"Audio file missing: {AUDIO_FILE}"
-        )
-
-    total_frames = (
-        VIDEO_DURATION *
-        FPS
-    )
-
-    filter_complex = (
-        "[0:v]"
-        "scale=1200:2133,"
+    # Slow zoom effect
+    vf = (
+        "scale=1080:1920,"
         "zoompan="
-        "z='min(zoom+0.00035,1.10)':"
+        "z='min(zoom+0.00035,1.12)':"
         "x='iw/2-(iw/zoom/2)':"
         "y='ih/2-(ih/zoom/2)':"
-        f"d={total_frames}:"
-        f"s={WIDTH}x{HEIGHT}:"
-        f"fps={FPS}"
-        "[bg];"
-
-        "[1:v]"
-        f"scale={WIDTH}:{HEIGHT}"
-        "[txt];"
-
-        "[bg][txt]"
-        "overlay=0:0"
-        "[v]"
+        "d=1:"
+        "s=1080x1920:"
+        "fps=30,"
+        "format=yuv420p"
     )
 
     command = [
@@ -1161,33 +741,27 @@ def make_video(
 
         "-loop",
         "1",
-        "-i",
-        str(bg_path),
 
-        "-loop",
-        "1",
         "-i",
-        str(text_path),
+        str(image_path),
 
         "-stream_loop",
         "-1",
+
         "-i",
         str(AUDIO_FILE),
 
-        "-filter_complex",
-        filter_complex,
-
-        "-map",
-        "[v]",
-
-        "-map",
-        "2:a",
+        "-vf",
+        vf,
 
         "-t",
-        str(VIDEO_DURATION),
+        str(VIDEO_SECONDS),
 
-        "-r",
-        str(FPS),
+        "-map",
+        "0:v:0",
+
+        "-map",
+        "1:a:0",
 
         "-c:v",
         "libx264",
@@ -1197,9 +771,6 @@ def make_video(
 
         "-crf",
         "23",
-
-        "-pix_fmt",
-        "yuv420p",
 
         "-c:a",
         "aac",
@@ -1215,14 +786,14 @@ def make_video(
         str(output_path)
     ]
 
-    log(
-        "Creating 75-second video..."
-    )
+    print("Creating video...")
 
     subprocess.run(
         command,
         check=True
     )
+
+    return output_path
 
 
 # ============================================================
@@ -1231,163 +802,83 @@ def make_video(
 
 def create_metadata(
     hadith,
-    photo
+    pexels
 ):
-
-    metadata_dir = (
-        OUTPUT_DIR /
-        "metadata"
+    base_name = (
+        OUTPUT_DIR
+        / f"hadith_{int(time.time())}"
     )
 
-    metadata_dir.mkdir(
-        exist_ok=True
+    title = (
+        f"{hadith['reference']} | "
+        f"Beautiful Hadith Reminder"
     )
 
-    reference = hadith["reference"]
-    source_url = hadith["url"]
-
-    photographer = photo[
-        "photographer"
-    ]
-
-    photographer_url = photo[
-        "photographer_url"
-    ]
-
-    pexels_url = photo[
-        "pexels_url"
-    ]
-
-    youtube = f"""TITLE:
-Hadith | {reference} | Urdu Islamic Reminder
-
-DESCRIPTION:
-Urdu Hadith from Sunnah.com.
-
-Reference:
-{reference}
-
-Hadith source:
-Sunnah.com
-{source_url}
-
-Photo:
-Photo by {photographer} on Pexels
-{photographer_url}
-{pexels_url}
-
-#Hadith #IslamicReminder #IslamicShorts #Urdu #Islam #Muslim
-"""
-
-    tiktok = f"""TITLE:
-Urdu Hadith | {reference}
-
-DESCRIPTION:
-A Hadith from Sunnah.com in Urdu.
-
-Reference:
-{reference}
-
-Source:
-Sunnah.com
-{source_url}
-
-Photo:
-Photo by {photographer} on Pexels
-{pexels_url}
-
-#Hadith #IslamicTikTok #IslamicReminder #UrduIslamic #Islam #Muslim
-"""
-
-    instagram = f"""TITLE:
-Urdu Hadith | {reference}
-
-DESCRIPTION:
-A Hadith from Sunnah.com in Urdu.
-
-Reference:
-{reference}
-
-Source:
-Sunnah.com
-{source_url}
-
-Photo:
-Photo by {photographer} on Pexels
-{pexels_url}
-
-#Hadith #IslamicReels #IslamicReminder #Urdu #Islam #Muslim
-"""
-
-    facebook = f"""TITLE:
-Urdu Hadith | {reference}
-
-DESCRIPTION:
-A Hadith from Sunnah.com in Urdu.
-
-Reference:
-{reference}
-
-Source:
-Sunnah.com
-{source_url}
-
-Photo:
-Photo by {photographer} on Pexels
-{pexels_url}
-
-#Hadith #IslamicReminder #Islam #Urdu #Muslim
-"""
-
-    files = {
-        "youtube.txt": youtube,
-        "tiktok.txt": tiktok,
-        "instagram.txt": instagram,
-        "facebook.txt": facebook,
-    }
-
-    for filename, content in files.items():
-
-        (
-            metadata_dir /
-            filename
-        ).write_text(
-            content,
-            encoding="utf-8"
-        )
-
-
-# ============================================================
-# SAVE USED HADITH
-# ============================================================
-
-def save_hadith_record(
-    hadith
-):
-
-    used = load_used()
-
-    key = (
-        f"{hadith['collection']}:"
-        f"{hadith['number']}"
+    description = (
+        f"{hadith['reference']}\n\n"
+        "Daily Islamic Hadith Reminder.\n\n"
+        "Hadith source: Sunnah.com\n"
+        f"Reference: {hadith['reference']}\n\n"
+        "Background photo by "
+        f"{pexels['photographer']} "
+        "via Pexels."
     )
 
-    used[key] = {
-        "created_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
+    hashtags = (
+        "#Hadith #Islam #IslamicReminder "
+        "#Quran #Sunnah #Muslim #Urdu"
+    )
 
-        "reference": hadith[
-            "reference"
+    # YouTube
+    (OUTPUT_DIR / "youtube_title.txt").write_text(
+        title,
+        encoding="utf-8"
+    )
+
+    (OUTPUT_DIR / "youtube_description.txt").write_text(
+        description,
+        encoding="utf-8"
+    )
+
+    # TikTok
+    (OUTPUT_DIR / "tiktok_caption.txt").write_text(
+        description + "\n\n" + hashtags,
+        encoding="utf-8"
+    )
+
+    # Instagram
+    (OUTPUT_DIR / "instagram_caption.txt").write_text(
+        description + "\n\n" + hashtags,
+        encoding="utf-8"
+    )
+
+    # Facebook
+    (OUTPUT_DIR / "facebook_caption.txt").write_text(
+        description + "\n\n" + hashtags,
+        encoding="utf-8"
+    )
+
+    # Internal record
+    metadata = {
+        "reference": hadith["reference"],
+        "collection": hadith["collection"],
+        "number": hadith["number"],
+        "sunnah_url": hadith["url"],
+        "pexels_photographer": pexels[
+            "photographer"
         ],
-
-        "url": hadith[
-            "url"
+        "pexels_url": pexels[
+            "pexels_url"
         ],
     }
 
-    save_used(
-        used
+    (OUTPUT_DIR / "metadata.json").write_text(
+        json.dumps(
+            metadata,
+            ensure_ascii=False,
+            indent=2
+        ),
+        encoding="utf-8"
     )
 
 
@@ -1397,94 +888,70 @@ def save_hadith_record(
 
 def main():
 
-    log(
-        "========================================"
+    print("=" * 60)
+    print("ISLAMIC HADITH VIDEO GENERATOR")
+    print("=" * 60)
+
+    # Check files
+    if not AUDIO_FILE.exists():
+        raise FileNotFoundError(
+            f"Missing audio file: {AUDIO_FILE}"
+        )
+
+    if not FONT_FILE.exists():
+        raise FileNotFoundError(
+            f"Missing font file: {FONT_FILE}"
+        )
+
+    # Get Hadith
+    hadith = get_random_hadith_page()
+
+    print()
+    print("Selected:")
+    print(hadith["reference"])
+    print()
+
+    # Download background
+    pexels = download_pexels_image()
+
+    # Create text image
+    image_path = create_text_image(
+        pexels["path"],
+        hadith["urdu"],
+        hadith["reference"]
     )
 
-    log(
-        "Islamic Hadith Video Generator"
+    # Create video
+    video_path = create_video(
+        image_path
     )
 
-    log(
-        "========================================"
-    )
-
-    # 1. Get exact Hadith from Sunnah.com.
-    hadith = get_hadith_from_sunnah()
-
-    log(
-        f"Hadith: {hadith['reference']}"
-    )
-
-    log(
-        f"Source: {hadith['url']}"
-    )
-
-    # 2. Get Pexels photo.
-    photo = get_pexels_photo()
-
-    log(
-        f"Photo: {photo['photographer']}"
-    )
-
-    # 3. Create background.
-    background = create_background(
-        photo["path"]
-    )
-
-    # 4. Create Urdu Hadith overlay.
-    overlay = create_text_overlay(
-        hadith
-    )
-
-    # 5. Filename.
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )
-
-    video_path = (
-        OUTPUT_DIR /
-        f"islamic_hadith_{timestamp}.mp4"
-    )
-
-    # 6. Create video.
-    make_video(
-        background,
-        overlay,
-        video_path
-    )
-
-    # 7. Create social metadata.
+    # Metadata
     create_metadata(
         hadith,
-        photo
+        pexels
     )
 
-    # 8. Only after successful video creation,
-    #    mark the Hadith as used.
-    save_hadith_record(
-        hadith
+    # IMPORTANT:
+    # Only mark Hadith as used after video succeeds.
+    used = load_used_hadith()
+
+    used.add(
+        hadith["key"]
     )
 
-    log(
-        "========================================"
+    save_used_hadith(
+        used
     )
 
-    log(
-        "VIDEO CREATED SUCCESSFULLY"
-    )
-
-    log(
-        f"Video: {video_path}"
-    )
-
-    log(
-        "Metadata: output/metadata/"
-    )
-
-    log(
-        "========================================"
-    )
+    print()
+    print("=" * 60)
+    print("VIDEO CREATED SUCCESSFULLY")
+    print("=" * 60)
+    print("Video:", video_path)
+    print("Reference:", hadith["reference"])
+    print("Pexels photographer:", pexels["photographer"])
+    print("=" * 60)
 
 
 if __name__ == "__main__":
