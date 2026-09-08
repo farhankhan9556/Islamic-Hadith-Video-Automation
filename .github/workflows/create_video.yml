@@ -4,150 +4,106 @@ on:
   workflow_dispatch:
 
   schedule:
-    # 9:00 AM UAE
     - cron: "0 5 * * *"
-
-    # 1:00 PM UAE
     - cron: "0 9 * * *"
-
-    # 8:00 PM UAE
     - cron: "0 16 * * *"
-
 
 concurrency:
   group: islamic-video-generator
   cancel-in-progress: false
 
-
 permissions:
   contents: write
 
-
 jobs:
-
   create-video:
 
     runs-on: ubuntu-latest
 
     steps:
 
-      # ------------------------------------------------------
-      # CHECKOUT
-      # ------------------------------------------------------
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-
-      # ------------------------------------------------------
-      # FFMPEG
-      # ------------------------------------------------------
-
-      - name: Install FFmpeg
+      - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-
-      # ------------------------------------------------------
-      # PYTHON
-      # ------------------------------------------------------
+          sudo apt-get install -y \
+            ffmpeg \
+            libraqm-dev \
+            libfribidi-dev \
+            libharfbuzz-dev
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-
-      # ------------------------------------------------------
-      # PYTHON PACKAGES
-      # ------------------------------------------------------
-
-      - name: Install Python dependencies
+      - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-
-      # ------------------------------------------------------
-      # CHECK FILES
-      # ------------------------------------------------------
-
       - name: Verify project files
         run: |
-
           test -f create_video.py
-
           test -f download_hadith_data.py
-
           test -f used_hadith.json
 
-          test -f fonts/NotoNaskhArabic-Regular.ttf
+          test -f fonts/NotoNastaliqUrdu-Regular.ttf
 
           test -f audio/islamic_background.mp3
 
-          echo "All required project files exist."
+          echo "All project files OK."
 
+      - name: Verify Urdu font and RAQM
+        run: |
+          python - <<'PY'
+          from PIL import ImageFont, features
 
-      # ------------------------------------------------------
-      # DOWNLOAD HADITH DATABASE
-      # ------------------------------------------------------
+          print("RAQM available:", features.check("raqm"))
+
+          if not features.check("raqm"):
+              raise SystemExit("ERROR: RAQM is not available.")
+
+          font = ImageFont.truetype(
+              "fonts/NotoNastaliqUrdu-Regular.ttf",
+              72
+          )
+
+          print("Noto Nastaliq Urdu font loaded successfully.")
+          print("Font bbox:", font.getbbox("پاکستان"))
+          PY
 
       - name: Prepare Urdu Hadith database
         run: |
           python download_hadith_data.py
 
-
-      # ------------------------------------------------------
-      # CREATE VIDEO
-      # ------------------------------------------------------
-
-      - name: Create Islamic Hadith video
+      - name: Create Islamic video
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-
         run: |
           python create_video.py
 
-
-      # ------------------------------------------------------
-      # UPLOAD ARTIFACT
-      # ------------------------------------------------------
-
-      - name: Upload generated video
+      - name: Upload generated files
         uses: actions/upload-artifact@v4
-
         with:
           name: islamic-video-${{ github.run_number }}
-
           path: output/
-
           if-no-files-found: error
-
-
-      # ------------------------------------------------------
-      # SAVE USED HADITH
-      # ------------------------------------------------------
 
       - name: Save used Hadith list
         run: |
-
           git config user.name "github-actions[bot]"
-
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add used_hadith.json
 
           if git diff --cached --quiet; then
-
-            echo "No Hadith list changes."
-
+            echo "No Hadith changes."
           else
-
             git commit -m "Update used Hadith list"
-
             git push
-
           fi
