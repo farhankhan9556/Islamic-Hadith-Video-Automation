@@ -1,592 +1,589 @@
-import os
 import json
+import os
 import random
-import time
+import re
 import subprocess
+import time
 from pathlib import Path
 
 import requests
-
-from PIL import (
-    Image,
-    ImageDraw,
-    ImageFont
-)
-
 import arabic_reshaper
-
 from bidi.algorithm import get_display
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-PEXELS_API_KEY = os.getenv(
-    "PEXELS_API_KEY"
-)
+ROOT = Path(__file__).resolve().parent
 
-WIDTH = 1080
-HEIGHT = 1920
+DATA_DIR = ROOT / "data"
+OUTPUT_DIR = ROOT / "output"
+WORK_DIR = ROOT / "work"
+AUDIO_FILE = ROOT / "audio" / "islamic_background.mp3"
+URDU_FONT = ROOT / "fonts" / "NotoNaskhArabic-Regular.ttf"
+USED_FILE = ROOT / "used_hadith.json"
 
+VIDEO_WIDTH = 1080
+VIDEO_HEIGHT = 1920
+FPS = 30
 VIDEO_SECONDS = 75
 
-BASE_DIR = Path(
-    __file__
-).resolve().parent
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "").strip()
 
-DATA_DIR = (
-    BASE_DIR / "data"
-)
-
-OUTPUT_DIR = (
-    BASE_DIR / "output"
-)
-
-WORK_DIR = (
-    BASE_DIR / "work"
-)
-
-AUDIO_FILE = (
-    BASE_DIR
-    / "audio"
-    / "islamic_background.mp3"
-)
-
-FONT_FILE = (
-    BASE_DIR
-    / "fonts"
-    / "NotoNaskhArabic-Regular.ttf"
-)
-
-USED_FILE = (
-    BASE_DIR
-    / "used_hadith.json"
-)
-
-
-OUTPUT_DIR.mkdir(
-    exist_ok=True
-)
-
-WORK_DIR.mkdir(
-    exist_ok=True
-)
+OUTPUT_DIR.mkdir(exist_ok=True)
+WORK_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
-# HADITH DATABASE
+# DATABASES
 # ============================================================
 
 DATABASES = {
     "bukhari": {
-        "file":
-            DATA_DIR / "urd-bukhari.json",
-
-        "name":
-            "Sahih al-Bukhari",
+        "file": DATA_DIR / "urd-bukhari.json",
+        "name": "Sahih al-Bukhari",
     },
-
     "muslim": {
-        "file":
-            DATA_DIR / "urd-muslim.json",
-
-        "name":
-            "Sahih Muslim",
+        "file": DATA_DIR / "urd-muslim.json",
+        "name": "Sahih Muslim",
     },
 }
+
+
+# ============================================================
+# PEXELS SEARCH TERMS
+# ============================================================
+
+PEXELS_QUERIES = [
+    "mosque",
+    "masjid",
+    "islamic architecture",
+    "mosque sunset",
+    "quran",
+    "kaaba",
+    "medina mosque",
+    "islamic background",
+    "beautiful mosque",
+]
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def run_command(command):
+    print("Running:", " ".join(map(str, command)))
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(result.stderr)
+        raise RuntimeError(
+            f"Command failed with exit code {result.returncode}"
+        )
+
+    return result
+
+
+def clean_spaces(text):
+    text = str(text or "")
+    text = text.replace("\r", " ")
+    text = text.replace("\n", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 # ============================================================
 # USED HADITH
 # ============================================================
 
-def load_used():
-
+def load_used_hadith():
     if not USED_FILE.exists():
-
         return set()
 
     try:
-
         data = json.loads(
-            USED_FILE.read_text(
-                encoding="utf-8"
-            )
+            USED_FILE.read_text(encoding="utf-8")
         )
 
-        if isinstance(
-            data,
-            dict
-        ):
+        if isinstance(data, dict):
+            return set(str(x) for x in data.keys())
 
-            return set(
-                data.keys()
-            )
+        if isinstance(data, list):
+            return set(str(x) for x in data)
 
-        if isinstance(
-            data,
-            list
-        ):
-
-            return set(data)
-
-    except Exception as e:
-
-        print(
-            "Could not read used_hadith.json:",
-            e
-        )
+    except Exception as exc:
+        print("Could not read used_hadith.json:", exc)
 
     return set()
 
 
-def save_used(used):
-
+def save_used_hadith(used):
     data = {
-        item: True
-        for item in sorted(used)
+        key: True
+        for key in sorted(used)
     }
 
     USED_FILE.write_text(
         json.dumps(
             data,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         ),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
 
 # ============================================================
-# LOAD DATABASE
+# HADITH DATABASE
 # ============================================================
 
-def load_database(collection):
-
-    info = DATABASES[
-        collection
-    ]
-
-    filename = info["file"]
-
-    if not filename.exists():
-
-        raise FileNotFoundError(
-            f"Missing Hadith database: {filename}"
-        )
-
-    print(
-        f"Loading {info['name']}..."
-    )
-
-    data = json.loads(
-        filename.read_text(
-            encoding="utf-8"
-        )
-    )
-
-    hadiths = data.get(
-        "hadiths"
-    )
-
-    if not isinstance(
-        hadiths,
-        list
-    ):
-
+def load_database(path):
+    if not path.exists():
         raise RuntimeError(
-            f"Invalid Hadith database: {filename}"
+            f"Hadith database missing: {path}"
+        )
+
+    try:
+        data = json.loads(
+            path.read_text(encoding="utf-8")
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Invalid JSON file: {path}\n{exc}"
+        )
+
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"Unexpected database format: {path}"
+        )
+
+    hadiths = data.get("hadiths")
+
+    if not isinstance(hadiths, list):
+        raise RuntimeError(
+            f"'hadiths' list not found in {path}"
         )
 
     print(
-        f"Loaded {len(hadiths)} Hadiths."
+        f"Loaded {len(hadiths)} Hadiths from "
+        f"{path.name}"
     )
 
     return hadiths
 
 
-# ============================================================
-# CLEAN HADITH TEXT
-# ============================================================
-
-def clean_hadith_text(text):
-
-    if not text:
-
-        return ""
-
-    text = str(text)
-
-    text = text.replace(
-        "\u00a0",
-        " "
-    )
-
-    text = text.replace(
-        "\r",
-        " "
-    )
-
-    text = text.replace(
-        "\n",
-        " "
-    )
-
-    text = " ".join(
-        text.split()
-    )
-
-    return text.strip()
-
-
-# ============================================================
-# GET HADITH NUMBER
-# ============================================================
-
-def get_hadith_number(hadith):
-
+def get_hadith_number(item):
     possible_keys = [
         "hadithnumber",
         "hadithNumber",
         "number",
-        "id"
+        "id",
     ]
 
     for key in possible_keys:
-
-        value = hadith.get(
-            key
-        )
+        value = item.get(key)
 
         if value is not None:
+            value = str(value).strip()
 
-            return str(value)
-
-    return None
-
-
-# ============================================================
-# GET HADITH TEXT
-# ============================================================
-
-def get_hadith_text(hadith):
-
-    possible_keys = [
-        "text",
-        "hadith",
-        "body"
-    ]
-
-    for key in possible_keys:
-
-        value = hadith.get(
-            key
-        )
-
-        if isinstance(
-            value,
-            str
-        ):
-
-            value = clean_hadith_text(
-                value
-            )
-
-            if len(value) >= 20:
-
+            if value:
                 return value
 
     return None
 
 
-# ============================================================
-# SELECT HADITH
-# ============================================================
+def get_hadith_text(item):
+    possible_keys = [
+        "text",
+        "hadith",
+        "body",
+        "hadithText",
+    ]
+
+    for key in possible_keys:
+        value = item.get(key)
+
+        if isinstance(value, str):
+            value = clean_spaces(value)
+
+            if value:
+                return value
+
+    return None
+
+
+def looks_like_urdu(text):
+    if not text:
+        return False
+
+    urdu_chars = re.findall(
+        r"[\u0600-\u06FF\u0750-\u077F]",
+        text,
+    )
+
+    return len(urdu_chars) >= 10
+
 
 def select_hadith():
+    used = load_used_hadith()
 
-    used = load_used()
+    candidates = []
 
-    collections = list(
-        DATABASES.keys()
-    )
-
-    random.shuffle(
-        collections
-    )
-
-    for collection in collections:
+    for collection_key, config in DATABASES.items():
 
         hadiths = load_database(
-            collection
+            config["file"]
         )
 
-        candidates = []
+        for item in hadiths:
 
-        for hadith in hadiths:
+            number = get_hadith_number(item)
+            text = get_hadith_text(item)
 
-            number = (
-                get_hadith_number(
-                    hadith
-                )
-            )
-
-            text = (
-                get_hadith_text(
-                    hadith
-                )
-            )
-
-            if not number:
+            if not number or not text:
                 continue
 
-            if not text:
+            if not looks_like_urdu(text):
                 continue
 
-            key = (
-                f"{collection}:{number}"
+            unique_key = (
+                f"{collection_key}:{number}"
             )
 
-            if key in used:
+            if unique_key in used:
                 continue
 
             candidates.append(
-                (
-                    hadith,
-                    number,
-                    text,
-                    key
-                )
+                {
+                    "key": unique_key,
+                    "collection": collection_key,
+                    "collection_name": config["name"],
+                    "number": number,
+                    "text": text,
+                }
             )
 
-        if not candidates:
+    if not candidates:
 
-            print(
-                f"No unused Hadiths left in {collection}."
-            )
-
-            continue
-
-        hadith, number, text, key = (
-            random.choice(
-                candidates
-            )
-        )
-
-        reference = (
-            f"{DATABASES[collection]['name']} "
-            f"{number}"
-        )
-
-        print()
         print(
-            "=" * 60
-        )
-        print(
-            "SELECTED HADITH"
-        )
-        print(
-            "=" * 60
+            "All available Hadiths have been used."
         )
 
         print(
-            "Collection:",
-            DATABASES[
-                collection
-            ]["name"]
+            "Resetting used_hadith.json."
         )
 
-        print(
-            "Number:",
-            number
-        )
+        used = set()
+        save_used_hadith(used)
 
-        print(
-            "Reference:",
-            reference
-        )
+        return select_hadith()
 
-        print(
-            "Text length:",
-            len(text)
-        )
+    selected = random.choice(candidates)
 
-        print(
-            "=" * 60
-        )
+    print()
+    print("=" * 70)
+    print("SELECTED HADITH")
+    print("=" * 70)
 
-        return {
-            "key": key,
-            "collection": collection,
-            "number": number,
-            "reference": reference,
-            "urdu": text
-        }
-
-    raise RuntimeError(
-        "No unused Hadiths are available."
+    print(
+        "Collection:",
+        selected["collection_name"],
     )
+
+    print(
+        "Number:",
+        selected["number"],
+    )
+
+    print(
+        "Text:",
+        selected["text"],
+    )
+
+    print("=" * 70)
+
+    return selected
 
 
 # ============================================================
 # PEXELS
 # ============================================================
 
-def download_pexels_image():
-
+def pexels_request(query):
     if not PEXELS_API_KEY:
-
         raise RuntimeError(
-            "PEXELS_API_KEY is missing."
+            "PEXELS_API_KEY GitHub Secret is missing."
         )
 
-    queries = [
-        "mosque",
-        "masjid",
-        "quran",
-        "islamic architecture",
-        "mosque sunset",
-        "islamic background",
-        "kaaba",
-        "medina mosque"
-    ]
-
-    query = random.choice(
-        queries
-    )
-
-    print(
-        "Pexels search:",
-        query
-    )
+    url = "https://api.pexels.com/v1/search"
 
     headers = {
-        "Authorization":
-            PEXELS_API_KEY
+        "Authorization": PEXELS_API_KEY
     }
 
     params = {
-        "query":
-            query,
-
-        "orientation":
-            "portrait",
-
-        "size":
-            "large",
-
-        "per_page":
-            15,
-
-        "page":
-            random.randint(
-                1,
-                3
-            )
+        "query": query,
+        "orientation": "portrait",
+        "size": "large",
+        "per_page": 15,
     }
 
     response = requests.get(
-        "https://api.pexels.com/v1/search",
+        url,
         headers=headers,
         params=params,
-        timeout=60
+        timeout=60,
     )
 
     response.raise_for_status()
 
-    data = response.json()
+    return response.json()
 
-    photos = data.get(
-        "photos",
-        []
-    )
 
-    if not photos:
+def download_image(url, destination):
+    for attempt in range(3):
 
-        raise RuntimeError(
-            "No Pexels photos found."
-        )
+        try:
 
-    photo = random.choice(
-        photos
-    )
-
-    sources = photo.get(
-        "src",
-        {}
-    )
-
-    image_url = (
-        sources.get(
-            "portrait"
-        )
-        or
-        sources.get(
-            "large2x"
-        )
-        or
-        sources.get(
-            "large"
-        )
-    )
-
-    if not image_url:
-
-        raise RuntimeError(
-            "Pexels image URL missing."
-        )
-
-    image_response = requests.get(
-        image_url,
-        timeout=60
-    )
-
-    image_response.raise_for_status()
-
-    image_path = (
-        WORK_DIR /
-        "background.jpg"
-    )
-
-    image_path.write_bytes(
-        image_response.content
-    )
-
-    return {
-        "path":
-            image_path,
-
-        "photographer":
-            photo.get(
-                "photographer",
-                "Unknown"
-            ),
-
-        "photographer_url":
-            photo.get(
-                "photographer_url",
-                ""
-            ),
-
-        "pexels_url":
-            photo.get(
-                "url",
-                ""
+            print(
+                f"Downloading image "
+                f"(attempt {attempt + 1})..."
             )
-    }
+
+            response = requests.get(
+                url,
+                timeout=90,
+                headers={
+                    "User-Agent":
+                    "Mozilla/5.0"
+                },
+            )
+
+            response.raise_for_status()
+
+            destination.write_bytes(
+                response.content
+            )
+
+            if destination.stat().st_size < 10000:
+                raise RuntimeError(
+                    "Downloaded image is too small."
+                )
+
+            Image.open(destination).verify()
+
+            print(
+                "Image downloaded:",
+                destination,
+            )
+
+            return destination
+
+        except Exception as exc:
+
+            print(
+                "Image download failed:",
+                exc,
+            )
+
+            time.sleep(2)
+
+    return None
+
+
+def get_pexels_image(destination):
+    queries = list(PEXELS_QUERIES)
+    random.shuffle(queries)
+
+    for query in queries:
+
+        try:
+
+            print(
+                "Searching Pexels:",
+                query,
+            )
+
+            data = pexels_request(query)
+
+            photos = data.get(
+                "photos",
+                [],
+            )
+
+            random.shuffle(photos)
+
+            for photo in photos:
+
+                source = photo.get(
+                    "src",
+                    {},
+                )
+
+                image_url = (
+                    source.get("large2x")
+                    or source.get("large")
+                    or source.get("original")
+                )
+
+                if not image_url:
+                    continue
+
+                result = download_image(
+                    image_url,
+                    destination,
+                )
+
+                if result:
+                    return result
+
+        except Exception as exc:
+
+            print(
+                "Pexels search failed:",
+                exc,
+            )
+
+    raise RuntimeError(
+        "Could not download an Islamic image from Pexels."
+    )
 
 
 # ============================================================
-# URDU TEXT
+# IMAGE PREPARATION
+# ============================================================
+
+def prepare_background(input_file):
+    image = Image.open(
+        input_file
+    ).convert("RGB")
+
+    image_ratio = (
+        image.width / image.height
+    )
+
+    target_ratio = (
+        VIDEO_WIDTH / VIDEO_HEIGHT
+    )
+
+    if image_ratio > target_ratio:
+
+        new_height = VIDEO_HEIGHT
+
+        new_width = int(
+            new_height * image_ratio
+        )
+
+    else:
+
+        new_width = VIDEO_WIDTH
+
+        new_height = int(
+            new_width / image_ratio
+        )
+
+    image = image.resize(
+        (new_width, new_height),
+        Image.Resampling.LANCZOS,
+    )
+
+    left = (
+        new_width - VIDEO_WIDTH
+    ) // 2
+
+    top = (
+        new_height - VIDEO_HEIGHT
+    ) // 2
+
+    image = image.crop(
+        (
+            left,
+            top,
+            left + VIDEO_WIDTH,
+            top + VIDEO_HEIGHT,
+        )
+    )
+
+    # Darken image slightly.
+    overlay = Image.new(
+        "RGBA",
+        image.size,
+        (0, 0, 0, 80),
+    )
+
+    image = Image.alpha_composite(
+        image.convert("RGBA"),
+        overlay,
+    )
+
+    output = (
+        WORK_DIR /
+        "background_prepared.jpg"
+    )
+
+    image.convert("RGB").save(
+        output,
+        quality=95,
+    )
+
+    return output
+
+
+# ============================================================
+# FONTS
+# ============================================================
+
+def get_urdu_font(size):
+    if not URDU_FONT.exists():
+        raise RuntimeError(
+            f"Urdu font missing: {URDU_FONT}"
+        )
+
+    return ImageFont.truetype(
+        str(URDU_FONT),
+        size,
+    )
+
+
+def get_reference_font(size):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+
+    for path in candidates:
+
+        if Path(path).exists():
+            return ImageFont.truetype(
+                path,
+                size,
+            )
+
+    # Last fallback.
+    return ImageFont.truetype(
+        str(URDU_FONT),
+        size,
+    )
+
+
+# ============================================================
+# URDU TEXT RENDERING
 # ============================================================
 
 def shape_urdu(text):
+    text = clean_spaces(text)
 
-    reshaped = (
-        arabic_reshaper.reshape(
-            text
-        )
+    reshaped = arabic_reshaper.reshape(
+        text
     )
 
     return get_display(
@@ -594,50 +591,63 @@ def shape_urdu(text):
     )
 
 
-def wrap_urdu_text(
-    draw,
-    text,
-    font,
-    max_width
-):
+def text_width(draw, text, font):
+    box = draw.textbbox(
+        (0, 0),
+        text,
+        font=font,
+    )
 
-    words = text.split()
+    return box[2] - box[0]
+
+
+def wrap_urdu(text, font, max_width):
+    """
+    IMPORTANT:
+    Wrap the original Urdu words first.
+    Only shape each completed line afterward.
+    """
+
+    words = clean_spaces(text).split()
 
     lines = []
-
     current = ""
+
+    test_image = Image.new(
+        "RGB",
+        (10, 10),
+    )
+
+    draw = ImageDraw.Draw(
+        test_image
+    )
 
     for word in words:
 
-        test = (
-            current
-            + " "
-            + word
-        ).strip()
+        candidate = (
+            word
+            if not current
+            else current + " " + word
+        )
 
         shaped = shape_urdu(
-            test
+            candidate
         )
 
-        bbox = draw.textbbox(
-            (0, 0),
-            shaped,
-            font=font
-        )
+        if (
+            text_width(
+                draw,
+                shaped,
+                font,
+            )
+            <= max_width
+        ):
 
-        width = (
-            bbox[2]
-            - bbox[0]
-        )
-
-        if width <= max_width:
-
-            current = test
+            current = candidate
 
         else:
 
             if current:
-
                 lines.append(
                     current
                 )
@@ -645,7 +655,6 @@ def wrap_urdu_text(
             current = word
 
     if current:
-
         lines.append(
             current
         )
@@ -654,311 +663,423 @@ def wrap_urdu_text(
 
 
 # ============================================================
-# CREATE IMAGE
+# SPLIT HADITH INTO PAGES
 # ============================================================
 
-def create_text_image(
-    background_path,
-    hadith_text,
-    reference
+def split_hadith_into_pages(text):
+    """
+    Creates readable pages rather than shrinking
+    the entire Hadith to tiny text.
+    """
+
+    font_size = 58
+
+    font = get_urdu_font(
+        font_size
+    )
+
+    raw_lines = wrap_urdu(
+        text,
+        font,
+        850,
+    )
+
+    # 5 lines maximum per screen.
+    max_lines = 5
+
+    pages = []
+
+    for index in range(
+        0,
+        len(raw_lines),
+        max_lines,
+    ):
+
+        page = raw_lines[
+            index:index + max_lines
+        ]
+
+        pages.append(page)
+
+    return pages
+
+
+# ============================================================
+# CREATE TEXT OVERLAY
+# ============================================================
+
+def create_overlay(
+    lines,
+    reference,
+    output_file,
 ):
-
-    image = Image.open(
-        background_path
-    ).convert(
-        "RGB"
-    )
-
-    target_ratio = (
-        WIDTH / HEIGHT
-    )
-
-    image_ratio = (
-        image.width /
-        image.height
-    )
-
-    # Crop to 9:16
-    if image_ratio > target_ratio:
-
-        new_width = int(
-            image.height
-            * target_ratio
-        )
-
-        left = (
-            image.width
-            - new_width
-        ) // 2
-
-        image = image.crop(
-            (
-                left,
-                0,
-                left + new_width,
-                image.height
-            )
-        )
-
-    else:
-
-        new_height = int(
-            image.width
-            / target_ratio
-        )
-
-        top = (
-            image.height
-            - new_height
-        ) // 2
-
-        image = image.crop(
-            (
-                0,
-                top,
-                image.width,
-                top + new_height
-            )
-        )
-
-    image = image.resize(
-        (
-            WIDTH,
-            HEIGHT
-        ),
-        Image.Resampling.LANCZOS
-    )
-
-    # Dark overlay
-    overlay = Image.new(
+    image = Image.new(
         "RGBA",
-        image.size,
-        (0, 0, 0, 115)
-    )
-
-    image = Image.alpha_composite(
-        image.convert(
-            "RGBA"
+        (
+            VIDEO_WIDTH,
+            VIDEO_HEIGHT,
         ),
-        overlay
+        (0, 0, 0, 0),
     )
 
     draw = ImageDraw.Draw(
         image
     )
 
-    font = ImageFont.truetype(
-        str(FONT_FILE),
-        60
+    # --------------------------------------------------------
+    # Fonts
+    # --------------------------------------------------------
+
+    urdu_font = get_urdu_font(58)
+
+    reference_font = get_reference_font(
+        34
     )
 
-    reference_font = (
-        ImageFont.truetype(
-            str(FONT_FILE),
-            42
+    # --------------------------------------------------------
+    # Prepare Urdu lines
+    # --------------------------------------------------------
+
+    shaped_lines = []
+
+    for line in lines:
+
+        shaped_lines.append(
+            shape_urdu(line)
         )
-    )
 
-    lines = wrap_urdu_text(
-        draw,
-        hadith_text,
-        font,
-        880
-    )
-
-    # Keep text readable
-    if len(lines) > 13:
-
-        lines = lines[:13]
+    # --------------------------------------------------------
+    # Calculate text block
+    # --------------------------------------------------------
 
     line_spacing = 18
 
     line_heights = []
 
-    for line in lines:
+    for line in shaped_lines:
 
-        shaped = shape_urdu(
-            line
+        box = draw.textbbox(
+            (0, 0),
+            line,
+            font=urdu_font,
         )
 
-        bbox = draw.textbbox(
-            (0, 0),
-            shaped,
-            font=font
+        height = (
+            box[3] - box[1]
         )
 
         line_heights.append(
-            bbox[3] -
-            bbox[1]
+            height
         )
 
-    total_height = (
+    text_height = (
         sum(line_heights)
-        +
-        (
-            line_spacing
-            *
-            max(
-                0,
-                len(lines) - 1
-            )
+        + line_spacing *
+        max(
+            0,
+            len(shaped_lines) - 1,
         )
     )
 
-    start_y = (
-        HEIGHT
-        - total_height
+    reference_box = draw.textbbox(
+        (0, 0),
+        reference,
+        font=reference_font,
+    )
+
+    reference_height = (
+        reference_box[3]
+        - reference_box[1]
+    )
+
+    reference_gap = 40
+
+    card_padding_x = 55
+    card_padding_top = 50
+    card_padding_bottom = 42
+
+    card_height = (
+        card_padding_top
+        + text_height
+        + reference_gap
+        + reference_height
+        + card_padding_bottom
+    )
+
+    card_width = 960
+
+    # --------------------------------------------------------
+    # Card position
+    # --------------------------------------------------------
+
+    card_x1 = (
+        VIDEO_WIDTH - card_width
     ) // 2
 
-    # Don't put text too high
-    start_y = max(
-        250,
-        start_y
+    card_x2 = (
+        card_x1 + card_width
     )
 
-    y = start_y
+    # Keep the card around the center/lower-middle.
+    card_y1 = int(
+        VIDEO_HEIGHT * 0.30
+    )
 
-    for line, height in zip(
-        lines,
-        line_heights
+    card_y2 = (
+        card_y1 + card_height
+    )
+
+    # Prevent going below screen.
+    if card_y2 > VIDEO_HEIGHT - 180:
+
+        card_y2 = (
+            VIDEO_HEIGHT - 180
+        )
+
+        card_y1 = (
+            card_y2 - card_height
+        )
+
+    # --------------------------------------------------------
+    # Main dark card
+    # --------------------------------------------------------
+
+    draw.rounded_rectangle(
+        (
+            card_x1,
+            card_y1,
+            card_x2,
+            card_y2,
+        ),
+        radius=38,
+        fill=(
+            0,
+            0,
+            0,
+            190,
+        ),
+        outline=(
+            255,
+            255,
+            255,
+            60,
+        ),
+        width=2,
+    )
+
+    # --------------------------------------------------------
+    # Urdu text
+    # --------------------------------------------------------
+
+    current_y = (
+        card_y1
+        + card_padding_top
+    )
+
+    center_x = VIDEO_WIDTH // 2
+
+    for index, line in enumerate(
+        shaped_lines
     ):
 
-        shaped = shape_urdu(
-            line
-        )
-
-        bbox = draw.textbbox(
+        box = draw.textbbox(
             (0, 0),
-            shaped,
-            font=font
+            line,
+            font=urdu_font,
         )
 
-        text_width = (
-            bbox[2]
-            - bbox[0]
+        line_width = (
+            box[2] - box[0]
         )
 
         x = (
-            WIDTH
-            - text_width
-        ) // 2
+            center_x
+            - line_width // 2
+        )
 
-        # Shadow
+        # Shadow.
         draw.text(
             (
                 x + 3,
-                y + 3
+                current_y + 4,
             ),
-            shaped,
-            font=font,
+            line,
+            font=urdu_font,
             fill=(
                 0,
                 0,
                 0,
-                190
-            )
+                230,
+            ),
         )
 
-        # Text
+        # White Urdu text.
         draw.text(
             (
                 x,
-                y
+                current_y,
             ),
-            shaped,
-            font=font,
+            line,
+            font=urdu_font,
             fill=(
                 255,
                 255,
                 255,
-                255
-            )
+                255,
+            ),
         )
 
-        y += (
-            height
+        current_y += (
+            line_heights[index]
             + line_spacing
         )
 
-    # ========================================================
-    # REFERENCE
-    # ========================================================
+    # --------------------------------------------------------
+    # Separator
+    # --------------------------------------------------------
 
-    reference_text = (
-        "حوالہ: "
-        + reference
+    separator_y = (
+        current_y + 5
     )
 
-    reference_text = (
-        shape_urdu(
-            reference_text
-        )
+    draw.line(
+        (
+            card_x1 + 100,
+            separator_y,
+            card_x2 - 100,
+            separator_y,
+        ),
+        fill=(
+            255,
+            255,
+            255,
+            80,
+        ),
+        width=2,
     )
 
-    bbox = draw.textbbox(
+    # --------------------------------------------------------
+    # Reference
+    # --------------------------------------------------------
+
+    reference_y = (
+        separator_y
+        + reference_gap
+    )
+
+    reference_box = draw.textbbox(
         (0, 0),
-        reference_text,
-        font=reference_font
+        reference,
+        font=reference_font,
     )
 
     reference_width = (
-        bbox[2]
-        - bbox[0]
+        reference_box[2]
+        - reference_box[0]
     )
 
     reference_x = (
-        WIDTH
-        - reference_width
-    ) // 2
-
-    reference_y = (
-        HEIGHT
-        - 250
+        center_x
+        - reference_width // 2
     )
 
+    # Reference shadow.
     draw.text(
         (
             reference_x + 2,
-            reference_y + 2
+            reference_y + 3,
         ),
-        reference_text,
+        reference,
         font=reference_font,
         fill=(
             0,
             0,
             0,
-            190
-        )
+            230,
+        ),
     )
 
+    # Reference.
     draw.text(
         (
             reference_x,
-            reference_y
+            reference_y,
         ),
-        reference_text,
+        reference,
         font=reference_font,
         fill=(
+            235,
+            235,
+            235,
             255,
-            255,
-            255,
-            255
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
+
+    image.save(
+        output_file,
+        "PNG",
+    )
+
+    print(
+        "Created overlay:",
+        output_file,
+    )
+
+
+# ============================================================
+# CREATE ALL OVERLAYS
+# ============================================================
+
+def create_overlays(
+    hadith,
+):
+    pages = split_hadith_into_pages(
+        hadith["text"]
+    )
+
+    reference = (
+        f'{hadith["collection_name"]} '
+        f'{hadith["number"]}'
+    )
+
+    overlay_dir = (
+        WORK_DIR / "overlays"
+    )
+
+    overlay_dir.mkdir(
+        exist_ok=True
+    )
+
+    overlay_files = []
+
+    for index, page in enumerate(
+        pages
+    ):
+
+        output_file = (
+            overlay_dir /
+            f"overlay_{index:03d}.png"
         )
+
+        create_overlay(
+            page,
+            reference,
+            output_file,
+        )
+
+        overlay_files.append(
+            output_file
+        )
+
+    print(
+        f"Created {len(overlay_files)} text pages."
     )
 
-    output = (
-        WORK_DIR /
-        "text_image.png"
-    )
-
-    image.convert(
-        "RGB"
-    ).save(
-        output,
-        quality=95
-    )
-
-    return output
+    return overlay_files
 
 
 # ============================================================
@@ -966,137 +1087,243 @@ def create_text_image(
 # ============================================================
 
 def create_video(
-    image_path
+    background,
+    overlays,
+    audio,
+    output_file,
 ):
+    if not overlays:
+        raise RuntimeError(
+            "No text overlays created."
+        )
 
-    output = (
-        OUTPUT_DIR
-        /
-        f"islamic_hadith_{int(time.time())}.mp4"
+    # Each page gets equal time.
+    page_duration = (
+        VIDEO_SECONDS
+        / len(overlays)
     )
 
-    video_filter = (
+    inputs = [
+        "-loop",
+        "1",
+        "-i",
+        str(background),
+    ]
+
+    for overlay in overlays:
+
+        inputs.extend(
+            [
+                "-loop",
+                "1",
+                "-i",
+                str(overlay),
+            ]
+        )
+
+    # Audio.
+    inputs.extend(
+        [
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(audio),
+        ]
+    )
+
+    filters = []
+
+    # Background with slow zoom.
+    filters.append(
+        "[0:v]"
         "scale=1080:1920,"
         "zoompan="
-        "z='min(zoom+0.00035,1.12)':"
-        "x='iw/2-(iw/zoom/2)':"
-        "y='ih/2-(ih/zoom/2)':"
-        "d=1:"
+        "z='min(zoom+0.00035,1.08)':"
+        "d=2250:"
         "s=1080x1920:"
         "fps=30,"
-        "format=yuv420p"
+        "trim=duration=75,"
+        "setpts=PTS-STARTPTS"
+        "[bg]"
+    )
+
+    previous = "[bg]"
+
+    # Add overlays sequentially.
+    for index in range(
+        len(overlays)
+    ):
+
+        overlay_input = (
+            f"[{index + 1}:v]"
+        )
+
+        overlay_output = (
+            f"[ov{index}]"
+        )
+
+        filters.append(
+            f"{overlay_input}"
+            f"format=rgba,"
+            f"trim=duration={page_duration:.3f},"
+            f"setpts=PTS-STARTPTS"
+            f"{overlay_output}"
+        )
+
+    # First overlay.
+    current = previous
+
+    for index in range(
+        len(overlays)
+    ):
+
+        output_label = (
+            f"[mix{index}]"
+        )
+
+        filters.append(
+            f"{current}"
+            f"{'[ov' + str(index) + ']'}"
+            f"overlay=0:0:"
+            f"enable='between(t,"
+            f"{index * page_duration:.3f},"
+            f"{(index + 1) * page_duration:.3f})'"
+            f"{output_label}"
+        )
+
+        current = output_label
+
+    # Audio is the final input.
+    audio_input = (
+        f"[{len(overlays) + 1}:a]"
+    )
+
+    filters.append(
+        f"{audio_input}"
+        f"atrim=duration={VIDEO_SECONDS},"
+        f"asetpts=PTS-STARTPTS"
+        f"[aud]"
+    )
+
+    filter_complex = ";".join(
+        filters
     )
 
     command = [
-
         "ffmpeg",
-
         "-y",
+        "-hide_banner",
 
-        "-loop",
-        "1",
+        *inputs,
 
-        "-i",
-        str(image_path),
+        "-filter_complex",
+        filter_complex,
 
-        "-stream_loop",
-        "-1",
+        "-map",
+        current,
 
-        "-i",
-        str(AUDIO_FILE),
-
-        "-vf",
-        video_filter,
+        "-map",
+        "[aud]",
 
         "-t",
         str(VIDEO_SECONDS),
-
-        "-map",
-        "0:v:0",
-
-        "-map",
-        "1:a:0",
 
         "-c:v",
         "libx264",
 
         "-preset",
-        "veryfast",
+        "medium",
 
         "-crf",
-        "23",
+        "20",
+
+        "-pix_fmt",
+        "yuv420p",
 
         "-c:a",
         "aac",
 
         "-b:a",
-        "128k",
-
-        "-shortest",
+        "192k",
 
         "-movflags",
         "+faststart",
 
-        str(output)
+        str(output_file),
     ]
 
-    print()
+    run_command(
+        command
+    )
+
     print(
-        "Creating video..."
+        "VIDEO CREATED:",
+        output_file,
     )
-
-    subprocess.run(
-        command,
-        check=True
-    )
-
-    return output
 
 
 # ============================================================
 # METADATA
 # ============================================================
 
-def create_metadata(
-    hadith,
-    pexels
-):
+def create_metadata(hadith):
+    collection = hadith[
+        "collection_name"
+    ]
+
+    number = hadith[
+        "number"
+    ]
 
     reference = (
-        hadith["reference"]
+        f"{collection} {number}"
     )
 
     title = (
-        f"{reference} | "
-        "Beautiful Hadith Reminder"
+        f"Beautiful Hadith | "
+        f"{reference} | Islamic Reminder"
     )
 
     description = (
-        f"{reference}\n\n"
-        "Daily Islamic Hadith Reminder.\n\n"
+        "Islamic Hadith reminder.\n\n"
         f"Reference: {reference}\n\n"
-        "Background photo by "
-        f"{pexels['photographer']} "
-        "via Pexels."
-    )
-
-    hashtags = (
+        "May Allah guide us and help us "
+        "follow the Sunnah. Ameen.\n\n"
+        "#IslamicReminder "
         "#Hadith "
         "#Islam "
-        "#IslamicReminder "
-        "#Quran "
         "#Sunnah "
         "#Muslim "
-        "#Urdu"
+        "#Quran "
+        "#IslamicShorts"
     )
 
-    # YouTube
+    tiktok_caption = (
+        f"{reference}\n\n"
+        "#Hadith #Islam #Sunnah "
+        "#Muslim #IslamicReminder"
+    )
+
+    instagram_caption = (
+        f"{reference}\n\n"
+        "A beautiful Islamic reminder.\n\n"
+        "#Hadith #Islam #Sunnah "
+        "#Muslim #IslamicReminder "
+        "#IslamicReels"
+    )
+
+    facebook_caption = (
+        f"{reference}\n\n"
+        "Islamic reminder for today.\n\n"
+        "#Hadith #Islam #Sunnah"
+    )
+
     (
         OUTPUT_DIR /
         "youtube_title.txt"
     ).write_text(
         title,
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     (
@@ -1104,67 +1331,39 @@ def create_metadata(
         "youtube_description.txt"
     ).write_text(
         description,
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
-    # TikTok
     (
         OUTPUT_DIR /
         "tiktok_caption.txt"
     ).write_text(
-        description
-        + "\n\n"
-        + hashtags,
-        encoding="utf-8"
+        tiktok_caption,
+        encoding="utf-8",
     )
 
-    # Instagram
     (
         OUTPUT_DIR /
         "instagram_caption.txt"
     ).write_text(
-        description
-        + "\n\n"
-        + hashtags,
-        encoding="utf-8"
+        instagram_caption,
+        encoding="utf-8",
     )
 
-    # Facebook
     (
         OUTPUT_DIR /
         "facebook_caption.txt"
     ).write_text(
-        description
-        + "\n\n"
-        + hashtags,
-        encoding="utf-8"
+        facebook_caption,
+        encoding="utf-8",
     )
 
-    # Internal metadata
     metadata = {
-
-        "collection":
-            hadith[
-                "collection"
-            ],
-
-        "reference":
-            reference,
-
-        "hadith_number":
-            hadith[
-                "number"
-            ],
-
-        "pexels_photographer":
-            pexels[
-                "photographer"
-            ],
-
-        "pexels_url":
-            pexels[
-                "pexels_url"
-            ]
+        "title": title,
+        "description": description,
+        "reference": reference,
+        "collection": collection,
+        "hadith_number": number,
     }
 
     (
@@ -1174,9 +1373,9 @@ def create_metadata(
         json.dumps(
             metadata,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         ),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
 
@@ -1187,122 +1386,152 @@ def create_metadata(
 def main():
 
     print()
-    print("=" * 60)
-    print(
-        "ISLAMIC HADITH VIDEO GENERATOR"
-    )
-    print("=" * 60)
+    print("=" * 70)
+    print("ISLAMIC HADITH VIDEO GENERATOR")
+    print("=" * 70)
+    print()
 
     # --------------------------------------------------------
-    # CHECK FILES
+    # Check required files.
     # --------------------------------------------------------
 
     if not PEXELS_API_KEY:
-
         raise RuntimeError(
-            "PEXELS_API_KEY is missing."
+            "PEXELS_API_KEY GitHub Secret is missing."
         )
 
     if not AUDIO_FILE.exists():
-
-        raise FileNotFoundError(
-            f"Missing audio: {AUDIO_FILE}"
+        raise RuntimeError(
+            f"Background audio missing: {AUDIO_FILE}"
         )
 
-    if not FONT_FILE.exists():
-
-        raise FileNotFoundError(
-            f"Missing font: {FONT_FILE}"
+    if not URDU_FONT.exists():
+        raise RuntimeError(
+            f"Urdu font missing: {URDU_FONT}"
         )
 
     # --------------------------------------------------------
-    # SELECT HADITH
+    # Clean previous work.
+    # --------------------------------------------------------
+
+    for item in WORK_DIR.iterdir():
+
+        try:
+
+            if item.is_file():
+                item.unlink()
+
+            elif item.is_dir():
+
+                import shutil
+
+                shutil.rmtree(
+                    item
+                )
+
+        except Exception as exc:
+
+            print(
+                "Could not clean:",
+                item,
+                exc,
+            )
+
+    # --------------------------------------------------------
+    # Select Hadith.
     # --------------------------------------------------------
 
     hadith = select_hadith()
 
     # --------------------------------------------------------
-    # DOWNLOAD IMAGE
+    # Download Islamic image.
     # --------------------------------------------------------
 
-    pexels = (
-        download_pexels_image()
+    original_image = (
+        WORK_DIR /
+        "pexels_islamic.jpg"
+    )
+
+    get_pexels_image(
+        original_image
     )
 
     # --------------------------------------------------------
-    # CREATE TEXT IMAGE
+    # Prepare image.
     # --------------------------------------------------------
 
-    image = (
-        create_text_image(
-            pexels["path"],
-            hadith["urdu"],
-            hadith["reference"]
-        )
+    background = prepare_background(
+        original_image
     )
 
     # --------------------------------------------------------
-    # CREATE VIDEO
+    # Create Urdu pages.
     # --------------------------------------------------------
 
-    video = (
-        create_video(
-            image
-        )
+    overlays = create_overlays(
+        hadith
     )
 
     # --------------------------------------------------------
-    # CREATE METADATA
+    # Output file.
+    # --------------------------------------------------------
+
+    timestamp = int(
+        time.time()
+    )
+
+    output_video = (
+        OUTPUT_DIR /
+        f"islamic_hadith_{timestamp}.mp4"
+    )
+
+    # --------------------------------------------------------
+    # Create video.
+    # --------------------------------------------------------
+
+    create_video(
+        background,
+        overlays,
+        AUDIO_FILE,
+        output_video,
+    )
+
+    # --------------------------------------------------------
+    # Metadata.
     # --------------------------------------------------------
 
     create_metadata(
-        hadith,
-        pexels
+        hadith
     )
 
     # --------------------------------------------------------
-    # MARK HADITH AS USED
+    # Mark Hadith as used ONLY after video succeeds.
     # --------------------------------------------------------
 
-    used = load_used()
+    used = load_used_hadith()
 
     used.add(
         hadith["key"]
     )
 
-    save_used(
+    save_used_hadith(
         used
     )
 
-    # --------------------------------------------------------
-    # FINISHED
-    # --------------------------------------------------------
-
     print()
-    print("=" * 60)
-    print(
-        "VIDEO CREATED SUCCESSFULLY"
-    )
-    print("=" * 60)
-
+    print("=" * 70)
+    print("SUCCESS")
+    print("=" * 70)
     print(
         "Video:",
-        video
+        output_video,
     )
-
     print(
-        "Reference:",
-        hadith["reference"]
+        "Hadith:",
+        hadith["collection_name"],
+        hadith["number"],
     )
-
-    print(
-        "Pexels:",
-        pexels[
-            "photographer"
-        ]
-    )
-
-    print("=" * 60)
+    print("=" * 70)
 
 
 if __name__ == "__main__":
