@@ -1,19 +1,32 @@
 name: Create Islamic Videos
 
 on:
+
   workflow_dispatch:
 
   schedule:
+
+    # 9:00 AM UAE
     - cron: "0 5 * * *"
+
+    # 1:00 PM UAE
     - cron: "0 9 * * *"
+
+    # 8:00 PM UAE
     - cron: "0 16 * * *"
 
+
 concurrency:
+
   group: islamic-video-generator
+
   cancel-in-progress: false
 
+
 permissions:
+
   contents: write
+
 
 jobs:
 
@@ -21,67 +34,149 @@ jobs:
 
     runs-on: ubuntu-latest
 
+
     steps:
 
-      - name: Checkout
+      # ==================================================
+      # CHECKOUT
+      # ==================================================
+
+      - name: Checkout repository
+
         uses: actions/checkout@v4
+
         with:
+
           fetch-depth: 0
 
-      - name: Install system packages
+
+      # ==================================================
+      # SYSTEM PACKAGES
+      # ==================================================
+
+      - name: Install FFmpeg
+
         run: |
+
           sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            libfribidi-dev \
-            libharfbuzz-dev
+
+          sudo apt-get install -y ffmpeg
+
+
+      # ==================================================
+      # PYTHON
+      # ==================================================
 
       - name: Setup Python
+
         uses: actions/setup-python@v5
+
         with:
+
           python-version: "3.11"
 
-      - name: Install Python dependencies
+
+      # ==================================================
+      # PYTHON PACKAGES
+      # ==================================================
+
+      - name: Install dependencies
+
         run: |
+
           python -m pip install --upgrade pip
+
           pip install -r requirements.txt
 
-      - name: Install Playwright Chromium
-        run: |
-          playwright install chromium
-          playwright install-deps chromium
+
+      # ==================================================
+      # VERIFY FILES
+      # ==================================================
 
       - name: Verify project files
+
         run: |
+
           test -f create_video.py
+
+          test -f download_hadith_data.py
+
           test -f used_hadith.json
+
           test -f fonts/NotoNaskhArabic-Regular.ttf
+
           test -f audio/islamic_background.mp3
-          echo "All required files are present."
+
+          echo "Project files OK."
+
+
+      # ==================================================
+      # DOWNLOAD HADITH DATABASE
+      # ==================================================
+
+      - name: Prepare Urdu Hadith database
+
+        run: |
+
+          python download_hadith_data.py
+
+
+      # ==================================================
+      # CREATE VIDEO
+      # ==================================================
 
       - name: Create Islamic video
+
         env:
+
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+
         run: |
+
           python create_video.py
 
+
+      # ==================================================
+      # UPLOAD ARTIFACT
+      # ==================================================
+
       - name: Upload generated files
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: islamic-video-${{ github.run_number }}
+
           path: output/
+
           if-no-files-found: error
 
+
+      # ==================================================
+      # SAVE USED HADITH
+      # ==================================================
+
       - name: Save used Hadith list
+
         run: |
+
           git config user.name "github-actions[bot]"
+
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
 
           git add used_hadith.json
 
+
           if git diff --cached --quiet; then
-            echo "No Hadith list changes."
+
+            echo "No Hadith changes."
+
           else
+
             git commit -m "Update used Hadith list"
+
             git push
+
           fi
