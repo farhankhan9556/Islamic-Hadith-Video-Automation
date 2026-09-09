@@ -1891,80 +1891,21 @@ def create_poster(
     )
 
     # --------------------------------------------------------
-    # TITLE
+    # TITLE REMOVED
     # --------------------------------------------------------
-
-    title_font = load_font(
-        TITLE_FONT,
-        58
-    )
-
-    title_lines = wrap_text(
-        draw,
-        title,
-        title_font,
-        830,
-        "rtl",
-        "ur"
-    )
-
-    title_y = 175
-
-    title_y = draw_centered_lines(
-        draw,
-        title_lines,
-        title_font,
-        WIDTH // 2,
-        title_y,
-        78,
-        GOLD,
-        "rtl",
-        "ur",
-        gap=3
-    )
-
-    divider_y = title_y + 12
-
-    draw.line(
-        (
-            230,
-            divider_y,
-            850,
-            divider_y
-        ),
-        fill=GOLD,
-        width=3
-    )
+    # The "دعا برائے ..." title line and its divider are intentionally
+    # not displayed on the video. The title is still retained for
+    # YouTube/TikTok metadata.
 
     # --------------------------------------------------------
-    # ARABIC BOX
+    # ARABIC TEXT
     # --------------------------------------------------------
 
-    arabic_top = divider_y + 35
+    arabic_top = CARD_Y1 + 55
     arabic_bottom = arabic_top + 355
 
-    draw.rounded_rectangle(
-        (
-            105,
-            arabic_top,
-            975,
-            arabic_bottom
-        ),
-        radius=32,
-        fill=(
-            255,
-            255,
-            255,
-            90
-        ),
-        outline=(
-            255,
-            255,
-            255,
-            255
-        ),
-        width=2
-    )
+    # Arabic middle box removed intentionally.
+    # The Arabic text is rendered directly on the main card.
 
     arabic_font, arabic_lines, arabic_line_height, arabic_height = fit_text(
         draw,
@@ -2011,28 +1952,8 @@ def create_poster(
     urdu_top = arabic_bottom + 30
     urdu_bottom = urdu_top + 465
 
-    draw.rounded_rectangle(
-        (
-            105,
-            urdu_top,
-            975,
-            urdu_bottom
-        ),
-        radius=32,
-        fill=(
-            255,
-            255,
-            255,
-            65
-        ),
-        outline=(
-            255,
-            255,
-            255,
-            255
-        ),
-        width=2
-    )
+    # Urdu translation middle box removed intentionally.
+    # The translation is rendered directly on the main card.
 
     label_font = load_font(
         TITLE_FONT,
