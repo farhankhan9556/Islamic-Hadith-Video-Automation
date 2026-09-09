@@ -2031,7 +2031,7 @@ def create_poster(
         355,
         "rtl",
         "ur",
-        2
+        10
     )
 
     meaning_y = (
@@ -2058,7 +2058,7 @@ def create_poster(
         DARK_TEXT,
         "rtl",
         "ur",
-        gap=2
+        gap=10
     )
 
     # --------------------------------------------------------
@@ -2067,9 +2067,12 @@ def create_poster(
 
     ref_y = urdu_bottom + 28
 
+    # Use the Arabic-capable font for the complete reference label.
+    # This prevents square/tofu glyphs when the reference contains
+    # Urdu/Arabic text such as a Surah name.
     ref_font = load_font(
-        ENGLISH_FONT,
-        28
+        ARABIC_FONT,
+        27
     )
 
     ref_text = (
@@ -2118,7 +2121,9 @@ def create_poster(
         ref_text,
         font=ref_font,
         fill=WHITE,
-        anchor="mm"
+        anchor="mm",
+        direction="rtl" if any("\u0600" <= ch <= "\u06ff" for ch in ref_text) else None,
+        language="ar" if any("\u0600" <= ch <= "\u06ff" for ch in ref_text) else None
     )
 
     # --------------------------------------------------------
@@ -2143,8 +2148,8 @@ def create_poster(
             draw,
             context,
             URDU_FONT,
-            29,
-            21,
+            36,
+            26,
             770,
             context_height,
             "rtl",
@@ -2159,10 +2164,10 @@ def create_poster(
             WIDTH // 2,
             context_top,
             context_line_height,
-            MUTED_TEXT,
+            DARK_TEXT,
             "rtl",
             "ur",
-            gap=1
+            gap=5
         )
 
     # --------------------------------------------------------
