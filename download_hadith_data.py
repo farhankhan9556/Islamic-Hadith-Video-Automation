@@ -1,134 +1,108 @@
+import os
 import json
-import time
-from pathlib import Path
-
 import requests
-
+from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-
 DATA_DIR.mkdir(exist_ok=True)
 
+API_KEY = os.getenv("HADITH_API_KEY")
 
-DATASETS = {
-    "urd-bukhari.json": [
-        "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/urd-bukhari.json",
-        "https://raw.githubusercontent.com/fawazahmed0/hadith-api/1/editions/urd-bukhari.json",
-    ],
+if not API_KEY:
+    raise SystemExit("ERROR: HADITH_API_KEY is not set.")
 
-    "urd-muslim.json": [
-        "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/urd-muslim.json",
-        "https://raw.githubusercontent.com/fawazahmed0/hadith-api/1/editions/urd-muslim.json",
-    ],
-}
+API_URL = "https://hadithapi.com/api/hadiths"
 
 
-def download_file(filename, urls):
-
+def download_collection(book, filename):
     output = DATA_DIR / filename
 
-    # If already downloaded, don't download again.
-    if output.exists() and output.stat().st_size > 1000:
+    print("=" * 60)
+    print(f"Downloading: {book}")
+    print("=" * 60)
 
-        print(f"Already exists: {output}")
+    params = {
+        "apiKey": API_KEY,
+        "book": book,
+        "paginate": 100
+    }
 
-        return
-
-
-    for url in urls:
-
-        print()
-        print("Downloading:")
-        print(url)
-
-        try:
-
-            response = requests.get(
-                url,
-                timeout=120,
-                headers={
-                    "User-Agent":
-                    "Mozilla/5.0"
-                }
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-            # Basic validation
-            if not isinstance(data, dict):
-                raise ValueError(
-                    "Downloaded data is not a JSON object."
-                )
-
-            if "hadiths" not in data:
-                raise ValueError(
-                    "JSON does not contain 'hadiths'."
-                )
-
-            hadiths = data["hadiths"]
-
-            if not isinstance(hadiths, list):
-                raise ValueError(
-                    "'hadiths' is not a list."
-                )
-
-            if len(hadiths) < 10:
-                raise ValueError(
-                    "Dataset contains too few Hadiths."
-                )
-
-            # Save formatted JSON
-            output.write_text(
-                json.dumps(
-                    data,
-                    ensure_ascii=False,
-                    indent=2
-                ),
-                encoding="utf-8"
-            )
-
-            print(
-                f"Downloaded {len(hadiths)} Hadiths."
-            )
-
-            print(
-                f"Saved: {output}"
-            )
-
-            return
-
-        except Exception as e:
-
-            print(
-                "Download failed:",
-                e
-            )
-
-            time.sleep(2)
-
-
-    raise RuntimeError(
-        f"Could not download {filename}"
+    response = requests.get(
+        API_URL,
+        params=params,
+        timeout=60
     )
+
+    print("HTTP STATUS:", response.status_code)
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if not isinstance(data, dict):
+        raise RuntimeError("Invalid API response.")
+
+    # Save the complete API response.
+    output.write_text(
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2
+        ),
+        encoding="utf-8"
+    )
+
+    print(f"Saved: {output}")
+
+    # Display a small verification.
+    hadiths = data.get("hadiths")
+
+    if isinstance(hadiths, dict):
+        records = hadiths.get("data", [])
+    elif isinstance(hadiths, list):
+        records = hadiths
+    else:
+        records = []
+
+    print("Hadith records received:", len(records))
+
+    if records:
+        first = records[0]
+
+        print("\nFIRST HADITH CHECK")
+        print("-" * 40)
+
+        print("Hadith number:",
+              first.get("hadithNumber"))
+
+        print("Arabic:",
+              first.get("hadithArabic"))
+
+        print("Urdu:",
+              first.get("hadithUrdu"))
+
+        print("-" * 40)
 
 
 def main():
 
+    print("\n")
     print("=" * 60)
-    print("DOWNLOADING URDU HADITH DATABASE")
+    print("HADITH API DATABASE")
     print("=" * 60)
 
-    for filename, urls in DATASETS.items():
+    download_collection(
+        "sahih-bukhari",
+        "bukhari.json"
+    )
 
-        download_file(
-            filename,
-            urls
-        )
+    download_collection(
+        "sahih-muslim",
+        "muslim.json"
+    )
 
-    print()
+    print("\n")
     print("=" * 60)
     print("HADITH DATABASE READY")
     print("=" * 60)
