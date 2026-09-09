@@ -1,6 +1,2 @@
 requests
 Pillow
-arabic-reshaper
-python-bidi
-beautifulsoup4
-playwright
