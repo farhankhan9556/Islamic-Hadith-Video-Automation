@@ -46,62 +46,106 @@ jobs:
 
 
       # =====================================================
-      # INSTALL FFMPEG
+      # SYSTEM PACKAGES
       # =====================================================
 
-      - name: Install FFmpeg
+      - name: Install FFmpeg and RTL support
         run: |
+
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          ffmpeg -version
+
+          sudo apt-get install -y \
+            ffmpeg \
+            fontconfig \
+            fonts-noto-core \
+            libfribidi0 \
+            libharfbuzz0b \
+            libthai0 \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libpangoft2-1.0-0
 
 
-      # =====================================================
-      # INSTALL ARABIC / URDU FONT
-      # =====================================================
+          echo ""
+          echo "========================================"
+          echo "FFmpeg"
+          echo "========================================"
 
-      - name: Install Arabic Urdu Font
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y fonts-noto-core fontconfig
+          ffmpeg -version | head -1
 
-          echo "Checking Noto Naskh Arabic..."
+
+          echo ""
+          echo "========================================"
+          echo "Arabic/Urdu Font"
+          echo "========================================"
 
           fc-match "Noto Naskh Arabic"
+
 
           FONT_PATH="/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
 
           if [ ! -f "$FONT_PATH" ]; then
+
             echo "ERROR: Noto Naskh Arabic font not found."
-            echo "Available Noto fonts:"
-            find /usr/share/fonts -iname "*Naskh*" -o -iname "*Arabic*" | head -50
+
+            find /usr/share/fonts \
+              -iname "*Naskh*" \
+              -o -iname "*Arabic*" \
+              | head -50
+
             exit 1
+
           fi
 
-          echo "Arabic/Urdu font found:"
+
+          echo "Font found:"
           ls -lh "$FONT_PATH"
 
 
       # =====================================================
-      # INSTALL PYTHON PACKAGES
+      # PYTHON PACKAGES
       # =====================================================
 
       - name: Install Python packages
         run: |
+
           python -m pip install --upgrade pip
+
           pip install -r requirements.txt
 
 
       # =====================================================
-      # CHECK PROJECT FILES
+      # CHECK PILLOW RTL SUPPORT
+      # =====================================================
+
+      - name: Check Pillow RTL support
+        run: |
+
+          python - <<'PY'
+
+          from PIL import Image, features
+
+          print("Pillow version:", Image.__version__)
+
+          print("RAQM support:",
+                features.check("raqm"))
+
+          if not features.check("raqm"):
+              raise SystemExit(
+                  "ERROR: Pillow RAQM/RTL support is not available."
+              )
+
+          print("RTL shaping support is available.")
+
+          PY
+
+
+      # =====================================================
+      # CHECK PROJECT
       # =====================================================
 
       - name: Check project files
         run: |
-
-          echo "========================================"
-          echo "Checking project files"
-          echo "========================================"
 
           test -f create_video.py
           test -f requirements.txt
@@ -110,25 +154,14 @@ jobs:
 
           echo "All required project files found."
 
-          echo ""
-          echo "Dua database:"
-          cat data/duas.json | head -20
-
-          echo ""
-          echo "FFmpeg:"
-          which ffmpeg
-
-          echo ""
-          echo "Python:"
-          python --version
-
 
       # =====================================================
-      # PREPARE FOLDERS
+      # PREPARE
       # =====================================================
 
       - name: Prepare folders
         run: |
+
           rm -rf output
           rm -rf work
 
@@ -144,11 +177,12 @@ jobs:
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
+
           python create_video.py
 
 
       # =====================================================
-      # CHECK GENERATED FILES
+      # CHECK VIDEO
       # =====================================================
 
       - name: Check generated files
@@ -160,19 +194,29 @@ jobs:
 
           ls -lah output/
 
-          VIDEO_FILE=$(find output -type f -name "*.mp4" -print -quit)
+
+          VIDEO_FILE=$(find output \
+            -type f \
+            -name "*.mp4" \
+            -print -quit)
+
 
           if [ -z "$VIDEO_FILE" ]; then
-            echo "ERROR: No MP4 video was generated."
+
+            echo "ERROR: No MP4 video generated."
+
             exit 1
+
           fi
 
-          echo ""
-          echo "Video successfully generated:"
-          echo "$VIDEO_FILE"
 
           echo ""
-          echo "Checking video information..."
+          echo "Video:"
+          echo "$VIDEO_FILE"
+
+
+          echo ""
+          echo "Video information:"
 
           ffprobe \
             -v error \
@@ -183,21 +227,23 @@ jobs:
 
 
       # =====================================================
-      # UPLOAD VIDEO
+      # UPLOAD
       # =====================================================
 
       - name: Upload generated video
         uses: actions/upload-artifact@v4
         with:
           name: Islamic-Dua-Video-${{ github.run_number }}
+
           path: |
             output/*.mp4
             output/*.json
+
           if-no-files-found: error
 
 
       # =====================================================
-      # SAVE USED DUA LIST
+      # SAVE USED DUA
       # =====================================================
 
       - name: Commit used Dua list
