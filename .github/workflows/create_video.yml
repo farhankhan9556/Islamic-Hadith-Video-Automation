@@ -1,4 +1,4 @@
-name: Create Islamic Videos
+name: Create Daily Dua Videos
 
 on:
 
@@ -6,19 +6,19 @@ on:
 
   schedule:
 
-    # 09:00 UAE = 05:00 UTC
+    # 09:00 UAE
     - cron: "0 5 * * *"
 
-    # 13:00 UAE = 09:00 UTC
+    # 13:00 UAE
     - cron: "0 9 * * *"
 
-    # 20:00 UAE = 16:00 UTC
+    # 20:00 UAE
     - cron: "0 16 * * *"
 
 
 concurrency:
 
-  group: islamic-video-generator
+  group: dua-video-generator
 
   cancel-in-progress: false
 
@@ -36,11 +36,11 @@ jobs:
 
     steps:
 
-      # ======================================================
+      # ------------------------------------------------------
       # CHECKOUT
-      # ======================================================
+      # ------------------------------------------------------
 
-      - name: Checkout repository
+      - name: Checkout
 
         uses: actions/checkout@v4
 
@@ -49,9 +49,9 @@ jobs:
           fetch-depth: 0
 
 
-      # ======================================================
+      # ------------------------------------------------------
       # SYSTEM PACKAGES
-      # ======================================================
+      # ------------------------------------------------------
 
       - name: Install system packages
 
@@ -66,9 +66,9 @@ jobs:
             libharfbuzz-dev
 
 
-      # ======================================================
+      # ------------------------------------------------------
       # PYTHON
-      # ======================================================
+      # ------------------------------------------------------
 
       - name: Setup Python
 
@@ -81,9 +81,9 @@ jobs:
           cache: "pip"
 
 
-      # ======================================================
+      # ------------------------------------------------------
       # PYTHON PACKAGES
-      # ======================================================
+      # ------------------------------------------------------
 
       - name: Install Python packages
 
@@ -94,32 +94,26 @@ jobs:
           pip install -r requirements.txt
 
 
-      # ======================================================
-      # VERIFY PROJECT
-      # ======================================================
+      # ------------------------------------------------------
+      # VERIFY FILES
+      # ------------------------------------------------------
 
       - name: Verify project files
 
         run: |
 
-          set -e
-
           test -f create_video.py
 
-          test -f download_hadith_data.py
-
-          test -f used_hadith.json
+          test -f data/duas.json
 
           test -f fonts/NotoNastaliqUrdu-Regular.ttf
 
           test -f audio/islamic_background.mp3
 
-          echo "All required project files are present."
 
-
-      # ======================================================
-      # VERIFY PYTHON + RAQM + FONT
-      # ======================================================
+      # ------------------------------------------------------
+      # VERIFY URDU FONT
+      # ------------------------------------------------------
 
       - name: Verify Urdu font and RAQM
 
@@ -137,69 +131,37 @@ jobs:
           if not features.check("raqm"):
 
               raise SystemExit(
-                  "ERROR: Pillow RAQM support is unavailable."
+                  "ERROR: Pillow RAQM is not available."
               )
 
           ImageFont.truetype(
               "fonts/NotoNastaliqUrdu-Regular.ttf",
-              72
+              60
           )
 
           print(
-              "Noto Nastaliq Urdu font loaded successfully."
+              "Urdu font loaded successfully."
           )
 
           PY
 
 
-      # ======================================================
-      # DOWNLOAD HADITH DATABASE
-      # ======================================================
-
-      - name: Prepare Hadith database
-
-        env:
-
-          HADITH_API_KEY: ${{ secrets.HADITH_API_KEY }}
-
-        run: |
-
-          set -e
-
-          if [ -z "$HADITH_API_KEY" ]; then
-
-            echo "ERROR: HADITH_API_KEY GitHub Secret is missing."
-
-            exit 1
-
-          fi
-
-          python download_hadith_data.py
-
-          test -s data/urd-bukhari.json
-
-          test -s data/urd-muslim.json
-
-          echo "Hadith databases created successfully."
-
-
-      # ======================================================
+      # ------------------------------------------------------
       # CREATE VIDEO
-      # ======================================================
+      # ------------------------------------------------------
 
-      - name: Create Islamic video
+      - name: Create Dua video
 
         env:
 
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY:
+            ${{ secrets.PEXELS_API_KEY }}
 
         run: |
-
-          set -e
 
           if [ -z "$PEXELS_API_KEY" ]; then
 
-            echo "ERROR: PEXELS_API_KEY GitHub Secret is missing."
+            echo "ERROR: PEXELS_API_KEY is missing."
 
             exit 1
 
@@ -208,49 +170,24 @@ jobs:
           python create_video.py
 
 
-      # ======================================================
-      # VALIDATE OUTPUT
-      # ======================================================
+      # ------------------------------------------------------
+      # VALIDATE
+      # ------------------------------------------------------
 
-      - name: Validate generated output
+      - name: Validate generated video
 
         run: |
 
-          set -e
+          ls -lah output/
 
-          VIDEO_FILE=$(find output \
-            -maxdepth 1 \
-            -type f \
-            -name "*.mp4" \
-            -print \
-            -quit)
+          test -n "$(find output -name '*.mp4' -type f)"
 
-          if [ -z "$VIDEO_FILE" ]; then
-
-            echo "ERROR: No MP4 video was generated."
-
-            exit 1
-
-          fi
-
-          test -s "$VIDEO_FILE"
-
-          test -s output/metadata.json
-
-          test -s output/youtube_title.txt
-
-          test -s output/youtube_description.txt
-
-          echo "Output validation passed."
-
-          echo "Generated video:"
-
-          echo "$VIDEO_FILE"
+          test -n "$(find output -name '*.json' -type f)"
 
 
-      # ======================================================
-      # UPLOAD ARTIFACT
-      # ======================================================
+      # ------------------------------------------------------
+      # ARTIFACT
+      # ------------------------------------------------------
 
       - name: Upload generated files
 
@@ -258,7 +195,8 @@ jobs:
 
         with:
 
-          name: islamic-video-${{ github.run_number }}
+          name:
+            dua-video-${{ github.run_number }}
 
           path: output/
 
@@ -267,11 +205,11 @@ jobs:
           retention-days: 7
 
 
-      # ======================================================
-      # SAVE USED HADITH
-      # ======================================================
+      # ------------------------------------------------------
+      # SAVE USED DUA
+      # ------------------------------------------------------
 
-      - name: Save used Hadith list
+      - name: Save used Dua list
 
         run: |
 
@@ -281,16 +219,16 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add used_hadith.json
+          git add used_duas.json
 
           if git diff --cached --quiet; then
 
-            echo "No Hadith changes."
+            echo "No Dua database changes."
 
           else
 
             git commit \
-              -m "Update used Hadith list"
+              -m "Update used Dua list"
 
             git push
 
