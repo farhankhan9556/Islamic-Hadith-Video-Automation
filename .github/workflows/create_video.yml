@@ -1,4 +1,4 @@
-name: Create Daily Dua Videos
+name: Create Islamic Dua Video
 
 on:
 
@@ -6,26 +6,14 @@ on:
 
   schedule:
 
-    # 09:00 UAE
+    # 09:00 UAE = 05:00 UTC
     - cron: "0 5 * * *"
 
-    # 13:00 UAE
+    # 13:00 UAE = 09:00 UTC
     - cron: "0 9 * * *"
 
-    # 20:00 UAE
+    # 20:00 UAE = 16:00 UTC
     - cron: "0 16 * * *"
-
-
-concurrency:
-
-  group: dua-video-generator
-
-  cancel-in-progress: false
-
-
-permissions:
-
-  contents: write
 
 
 jobs:
@@ -34,202 +22,102 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
 
-      # ------------------------------------------------------
+      # --------------------------------------------------
       # CHECKOUT
-      # ------------------------------------------------------
+      # --------------------------------------------------
 
-      - name: Checkout
-
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-        with:
 
-          fetch-depth: 0
-
-
-      # ------------------------------------------------------
-      # SYSTEM PACKAGES
-      # ------------------------------------------------------
-
-      - name: Install system packages
-
-        run: |
-
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            ffmpeg \
-            libraqm-dev \
-            libfribidi-dev \
-            libharfbuzz-dev
-
-
-      # ------------------------------------------------------
+      # --------------------------------------------------
       # PYTHON
-      # ------------------------------------------------------
+      # --------------------------------------------------
 
-      - name: Setup Python
-
+      - name: Set up Python
         uses: actions/setup-python@v5
 
         with:
-
           python-version: "3.11"
 
-          cache: "pip"
 
-
-      # ------------------------------------------------------
-      # PYTHON PACKAGES
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # INSTALL DEPENDENCIES
+      # --------------------------------------------------
 
       - name: Install Python packages
-
         run: |
-
           python -m pip install --upgrade pip
-
           pip install -r requirements.txt
 
 
-      # ------------------------------------------------------
-      # VERIFY FILES
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # CHECK FFMPEG
+      # --------------------------------------------------
 
-      - name: Verify project files
-
+      - name: Check FFmpeg
         run: |
-
-          test -f create_video.py
-
-          test -f data/duas.json
-
-          test -f fonts/NotoNastaliqUrdu-Regular.ttf
-
-          test -f audio/islamic_background.mp3
+          ffmpeg -version
 
 
-      # ------------------------------------------------------
-      # VERIFY URDU FONT
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # CREATE OUTPUT FOLDERS
+      # --------------------------------------------------
 
-      - name: Verify Urdu font and RAQM
-
+      - name: Prepare folders
         run: |
-
-          python - <<'PY'
-
-          from PIL import ImageFont, features
-
-          print(
-              "RAQM available:",
-              features.check("raqm")
-          )
-
-          if not features.check("raqm"):
-
-              raise SystemExit(
-                  "ERROR: Pillow RAQM is not available."
-              )
-
-          ImageFont.truetype(
-              "fonts/NotoNastaliqUrdu-Regular.ttf",
-              60
-          )
-
-          print(
-              "Urdu font loaded successfully."
-          )
-
-          PY
+          mkdir -p output
+          mkdir -p work
 
 
-      # ------------------------------------------------------
-      # CREATE VIDEO
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # RUN VIDEO CREATOR
+      # --------------------------------------------------
 
       - name: Create Dua video
-
         env:
-
-          PEXELS_API_KEY:
-            ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
 
         run: |
-
-          if [ -z "$PEXELS_API_KEY" ]; then
-
-            echo "ERROR: PEXELS_API_KEY is missing."
-
-            exit 1
-
-          fi
-
           python create_video.py
 
 
-      # ------------------------------------------------------
-      # VALIDATE
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # UPLOAD VIDEO AS GITHUB ARTIFACT
+      # --------------------------------------------------
 
-      - name: Validate generated video
-
-        run: |
-
-          ls -lah output/
-
-          test -n "$(find output -name '*.mp4' -type f)"
-
-          test -n "$(find output -name '*.json' -type f)"
-
-
-      # ------------------------------------------------------
-      # ARTIFACT
-      # ------------------------------------------------------
-
-      - name: Upload generated files
-
+      - name: Upload generated video
         uses: actions/upload-artifact@v4
 
         with:
 
-          name:
-            dua-video-${{ github.run_number }}
+          name: Islamic-Dua-Video-${{ github.run_number }}
 
-          path: output/
+          path: |
+            output/*.mp4
+            output/*.json
 
           if-no-files-found: error
 
-          retention-days: 7
 
+      # --------------------------------------------------
+      # SAVE USED DUA LIST
+      # --------------------------------------------------
 
-      # ------------------------------------------------------
-      # SAVE USED DUA
-      # ------------------------------------------------------
-
-      - name: Save used Dua list
-
+      - name: Commit used Dua list
         run: |
 
-          git config user.name \
-            "github-actions[bot]"
+          git config user.name "github-actions[bot]"
 
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add used_duas.json
 
-          if git diff --cached --quiet; then
+          git diff --cached --quiet || git commit -m "Update used Dua list"
 
-            echo "No Dua database changes."
-
-          else
-
-            git commit \
-              -m "Update used Dua list"
-
-            git push
-
-          fi
+          git push
