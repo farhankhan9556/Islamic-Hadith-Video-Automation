@@ -6,6 +6,8 @@ import random
 import shutil
 import zipfile
 import subprocess
+import time
+import unicodedata
 from pathlib import Path
 from datetime import datetime
 
@@ -19,17 +21,11 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, features
 
 WIDTH = 1080
 HEIGHT = 1920
+
 FPS = 24
 VIDEO_SECONDS = 60
 
 BATCH_SIZE = 3
-
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
-
-PEXELS_URL = "https://api.pexels.com/v1/search"
-
-QURANENC_TRANSLATION_KEY = "urdu_junagarhi"
-QURANENC_API = "https://quranenc.com/api/v1"
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -42,58 +38,113 @@ AUDIO_FILE = PROJECT_DIR / "audio" / "islamic_background.mp3"
 OUTPUT_DIR = PROJECT_DIR / "output"
 WORK_DIR = PROJECT_DIR / "work"
 
+PEXELS_API_KEY = os.getenv(
+    "PEXELS_API_KEY",
+    ""
+).strip()
+
+PEXELS_URL = "https://api.pexels.com/v1/search"
+
+QURANENC_API = "https://quranenc.com/api/v1"
+
+# Known key, but the script will automatically discover
+# the current key from QuranEnc first.
+KNOWN_URDU_KEY = "urdu_junagarhi"
+
 
 # ============================================================
-# COLORS
+# VISUAL SETTINGS
 # ============================================================
 
-BG_OVERLAY = (8, 12, 18, 115)
+CARD_X1 = 65
+CARD_X2 = WIDTH - 65
 
-CARD = (247, 242, 228, 238)
-CARD_INNER = (255, 250, 238, 40)
+CARD_Y1 = 125
+CARD_Y2 = HEIGHT - 115
 
-GOLD = (198, 157, 72, 255)
-GOLD_LIGHT = (232, 205, 137, 255)
+GOLD = (205, 168, 92, 255)
+GOLD_LIGHT = (238, 213, 157, 255)
 
-DARK_TEXT = (36, 30, 24, 255)
-MUTED_TEXT = (88, 76, 62, 255)
+CREAM = (248, 243, 231, 245)
+
+DARK_TEXT = (35, 30, 25, 255)
+
+MUTED_TEXT = (87, 76, 63, 255)
+
+GREEN = (39, 91, 68, 255)
 
 WHITE = (255, 255, 255, 255)
 
-GREEN = (44, 93, 71, 255)
+
+# ============================================================
+# SESSION
+# ============================================================
+
+SESSION = requests.Session()
+
+SESSION.headers.update({
+    "User-Agent": (
+        "Islamic-Dua-Video-Automation/1.0 "
+        "(GitHub Actions)"
+    ),
+    "Accept": "application/json",
+})
 
 
 # ============================================================
-# FONT LOCATOR
+# FONT DISCOVERY
 # ============================================================
 
 def find_font(names):
+
     candidates = []
 
     for name in names:
+
         candidates.extend([
             FONT_DIR / name,
-            Path("/usr/share/fonts/truetype/noto") / name,
-            Path("/usr/share/fonts/opentype/noto") / name,
+
+            Path(
+                "/usr/share/fonts/truetype/noto"
+            ) / name,
+
+            Path(
+                "/usr/share/fonts/opentype/noto"
+            ) / name,
+
+            Path(
+                "/usr/share/fonts/truetype/dejavu"
+            ) / name,
         ])
 
     for path in candidates:
+
         if path.exists():
+
             return str(path)
 
-    # Try fc-match on Ubuntu
-    for family in names:
+    # Ubuntu fontconfig fallback
+
+    for name in names:
+
         try:
+
             result = subprocess.run(
-                ["fc-match", "-f", "%{file}", family],
+                [
+                    "fc-match",
+                    "-f",
+                    "%{file}",
+                    name
+                ],
                 capture_output=True,
                 text=True,
-                check=False,
+                check=False
             )
 
             path = result.stdout.strip()
 
             if path and Path(path).exists():
+
                 return path
 
         except Exception:
@@ -109,8 +160,8 @@ ARABIC_FONT = find_font([
 
 URDU_FONT = find_font([
     "NotoNastaliqUrdu-Regular.ttf",
-    "NotoNastaliqUrdu-Bold.ttf",
     "NotoNaskhArabic-Regular.ttf",
+    "NotoSansArabic-Regular.ttf",
 ])
 
 TITLE_FONT = find_font([
@@ -119,68 +170,142 @@ TITLE_FONT = find_font([
 ])
 
 ENGLISH_FONT = find_font([
+    "DejaVuSans.ttf",
     "NotoSans-Regular.ttf",
 ])
 
 
 # ============================================================
-# CHECKS
+# ENVIRONMENT CHECK
 # ============================================================
 
 def check_environment():
 
-    print("Checking environment...")
+    print("")
+    print("=" * 70)
+    print("ENVIRONMENT CHECK")
+    print("=" * 70)
 
     if not features.check("raqm"):
+
         raise RuntimeError(
-            "Pillow RAQM support is not available. "
-            "Install libraqm-dev/libfribidi-dev and rebuild Pillow."
+            "Pillow RAQM is not available. "
+            "Check libraqm-dev/libfribidi-dev installation."
         )
 
+    print(
+        "Pillow RAQM:",
+        features.check("raqm")
+    )
+
     if not ARABIC_FONT:
-        raise RuntimeError("Arabic font not found.")
+
+        raise RuntimeError(
+            "Arabic font not found."
+        )
 
     if not URDU_FONT:
-        raise RuntimeError("Urdu font not found.")
+
+        raise RuntimeError(
+            "Urdu font not found."
+        )
 
     if not TITLE_FONT:
-        raise RuntimeError("Title font not found.")
+
+        raise RuntimeError(
+            "Title font not found."
+        )
+
+    if not ENGLISH_FONT:
+
+        raise RuntimeError(
+            "English font not found."
+        )
+
+    print(
+        "Arabic font:",
+        ARABIC_FONT
+    )
+
+    print(
+        "Urdu font:",
+        URDU_FONT
+    )
+
+    print(
+        "Title font:",
+        TITLE_FONT
+    )
 
     if not DATA_FILE.exists():
-        raise RuntimeError(f"Missing file: {DATA_FILE}")
+
+        raise RuntimeError(
+            f"Missing: {DATA_FILE}"
+        )
 
     if not AUDIO_FILE.exists():
-        raise RuntimeError(f"Missing audio: {AUDIO_FILE}")
+
+        raise RuntimeError(
+            f"Missing: {AUDIO_FILE}"
+        )
 
     if not PEXELS_API_KEY:
+
         raise RuntimeError(
             "PEXELS_API_KEY GitHub Secret is missing."
         )
 
-    print(f"Arabic font: {ARABIC_FONT}")
-    print(f"Urdu font:   {URDU_FONT}")
-    print(f"RAQM:        {features.check('raqm')}")
+    print(
+        "PEXELS_API_KEY: OK"
+    )
+
+    print(
+        "Environment check passed."
+    )
 
 
 # ============================================================
-# GENERAL HELPERS
+# FILE HELPERS
 # ============================================================
 
 def load_json(path, default):
+
     if not path.exists():
+
         return default
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+
+        with open(
+            path,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             return json.load(f)
-    except Exception:
+
+    except Exception as e:
+
+        print(
+            f"Warning: Could not read {path}: {e}"
+        )
+
         return default
 
 
 def save_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w", encoding="utf-8") as f:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    with open(
+        path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
         json.dump(
             data,
             f,
@@ -189,26 +314,30 @@ def save_json(path, data):
         )
 
 
-def clean_output_folder():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def clean_folder(path):
 
-    for item in OUTPUT_DIR.iterdir():
+    if path.exists():
 
-        if item.is_dir():
-            shutil.rmtree(item)
+        for item in path.iterdir():
 
-        else:
-            item.unlink()
+            if item.is_dir():
 
+                shutil.rmtree(item)
 
-def clean_work_folder():
-    if WORK_DIR.exists():
-        shutil.rmtree(WORK_DIR)
+            else:
 
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
+                item.unlink()
+
+    else:
+
+        path.mkdir(
+            parents=True,
+            exist_ok=True
+        )
 
 
 def safe_filename(text):
+
     text = str(text)
 
     text = re.sub(
@@ -217,287 +346,47 @@ def safe_filename(text):
         text
     )
 
-    text = re.sub(r"\s+", "_", text)
+    text = re.sub(
+        r"\s+",
+        "_",
+        text
+    )
 
     return text[:100]
 
 
 # ============================================================
-# QURANENC
+# DUA HELPERS
 # ============================================================
 
-def get_quranenc_version():
-
-    url = f"{QURANENC_API}/translations/list/ur"
-
-    try:
-
-        response = requests.get(
-            url,
-            params={"localization": "ur"},
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        if isinstance(data, list):
-
-            for item in data:
-
-                if item.get("key") == QURANENC_TRANSLATION_KEY:
-
-                    return item.get(
-                        "version",
-                        "Version not returned by API"
-                    )
-
-    except Exception as e:
-
-        print(
-            "Warning: Could not retrieve QuranEnc version:",
-            e
-        )
-
-    return "Version not returned by API"
-
-
-def clean_quranenc_translation(text):
-
-    """
-    Removes HTML/footnote formatting that can appear in
-    QuranEnc translations.
-
-    Examples removed:
-
-        <sup>[1]</sup>
-        [1]
-        ［1］
-        ^{[1]}
-        ¹ ² ³
-
-    This prevents the little footnote markers from becoming
-    square boxes when rendered by Pillow.
-    """
-
-    if not text:
-        return ""
-
-    text = html.unescape(str(text))
-
-    # --------------------------------------------------------
-    # Remove HTML tags
-    # --------------------------------------------------------
-
-    # Specifically remove superscript footnotes first
-    text = re.sub(
-        r"<sup[^>]*>\s*[\[\［]?\s*[0-9٠-٩]+\s*[\]\］]?\s*</sup>",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    text = re.sub(
-        r"<sup[^>]*>\s*\^\s*\{\s*[\[]?\s*[0-9٠-٩]+\s*[\]]?\s*\}\s*</sup>",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # Remove remaining HTML
-    text = re.sub(
-        r"<[^>]+>",
-        "",
-        text
-    )
-
-    # --------------------------------------------------------
-    # Remove QuranEnc web-style footnote markers
-    # --------------------------------------------------------
-
-    # ^{[1]}
-    text = re.sub(
-        r"\^\s*\{\s*[\[\［]\s*[0-9٠-٩]+\s*[\]\］]\s*\}",
-        "",
-        text
-    )
-
-    # ^{1}
-    text = re.sub(
-        r"\^\s*\{\s*[0-9٠-٩]+\s*\}",
-        "",
-        text
-    )
-
-    # [1]
-    text = re.sub(
-        r"[\[\［]\s*[0-9٠-٩]+\s*[\]\］]",
-        "",
-        text
-    )
-
-    # ﴿1﴾
-    text = re.sub(
-        r"﴿\s*[0-9٠-٩]+\s*﴾",
-        "",
-        text
-    )
-
-    # (1) when used as a standalone footnote marker
-    text = re.sub(
-        r"(?<!\d)\(\s*[0-9٠-٩]+\s*\)(?!\d)",
-        "",
-        text
-    )
-
-    # Superscript Unicode digits
-    text = re.sub(
-        r"[\u00B9\u00B2\u00B3\u2070-\u2079]",
-        "",
-        text
-    )
-
-    # --------------------------------------------------------
-    # Remove stray formatting symbols left by footnotes
-    # --------------------------------------------------------
-
-    text = text.replace("^{", "")
-    text = text.replace("}", "")
-
-    # Invisible formatting characters
-    text = re.sub(
-        r"[\u200b\u200c\u200d\u2060\ufeff]",
-        "",
-        text
-    )
-
-    # Soft hyphen
-    text = text.replace("\u00ad", "")
-
-    # Normalize whitespace
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
-
-    # Clean spaces before punctuation
-    text = re.sub(
-        r"\s+([،۔,.;:!?؟])",
-        r"\1",
-        text
-    )
-
-    # --------------------------------------------------------
-    # Final safety check
-    # --------------------------------------------------------
-
-    forbidden = [
-        "□",
-        "�",
-        "^{[",
-        "<sup",
-        "</sup>",
-    ]
-
-    for bad in forbidden:
-
-        if bad in text:
-
-            raise RuntimeError(
-                f"Unclean QuranEnc marker remained: {bad!r}"
-            )
-
-    return text
-
-
-def fetch_single_translation(sura, ayah):
-
-    url = (
-        f"{QURANENC_API}/translation/aya/"
-        f"{QURANENC_TRANSLATION_KEY}/"
-        f"{sura}/{ayah}"
-    )
-
-    response = requests.get(
-        url,
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    translation = data.get("translation", "")
-
-    return clean_quranenc_translation(
-        translation
-    )
-
-
-def fetch_quran_translation(
-    sura,
-    ayah,
-    ayah_end=None
+def get_dua_field(
+    dua,
+    *names,
+    default=""
 ):
-
-    if not ayah_end:
-        ayah_end = ayah
-
-    translations = []
-
-    for current_ayah in range(
-        int(ayah),
-        int(ayah_end) + 1
-    ):
-
-        print(
-            f"Fetching QuranEnc "
-            f"{sura}:{current_ayah}"
-        )
-
-        translation = fetch_single_translation(
-            sura,
-            current_ayah
-        )
-
-        if translation:
-            translations.append(
-                translation
-            )
-
-    result = " ".join(translations)
-
-    result = clean_quranenc_translation(result)
-
-    if not result:
-        raise RuntimeError(
-            f"Empty QuranEnc translation for "
-            f"{sura}:{ayah}-{ayah_end}"
-        )
-
-    return result
-
-
-# ============================================================
-# DUA DATA
-# ============================================================
-
-def get_dua_field(dua, *names, default=""):
 
     for name in names:
 
         value = dua.get(name)
 
-        if value is not None and str(value).strip():
+        if value is not None:
 
-            return value
+            value = str(value).strip()
+
+            if value:
+
+                return value
 
     return default
 
 
 def dua_identifier(dua):
+
+    dua_id = dua.get("id")
+
+    if dua_id:
+
+        return str(dua_id).strip()
 
     reference = get_dua_field(
         dua,
@@ -533,14 +422,63 @@ def load_duas():
             "data/duas.json must contain a JSON array."
         )
 
-    if len(data) < BATCH_SIZE:
+    valid = []
 
-        raise RuntimeError(
-            f"You need at least {BATCH_SIZE} "
-            f"different duas in data/duas.json."
+    for index, dua in enumerate(data):
+
+        if not isinstance(dua, dict):
+
+            print(
+                f"Skipping invalid Dua entry #{index + 1}"
+            )
+
+            continue
+
+        if not dua.get("sura"):
+
+            print(
+                f"Skipping Dua without sura: {dua}"
+            )
+
+            continue
+
+        if not dua.get("ayah"):
+
+            print(
+                f"Skipping Dua without ayah: {dua}"
+            )
+
+            continue
+
+        arabic = get_dua_field(
+            dua,
+            "arabic",
+            "dua",
+            "text"
         )
 
-    return data
+        if not arabic:
+
+            print(
+                f"Skipping Dua without Arabic: {dua}"
+            )
+
+            continue
+
+        valid.append(dua)
+
+    if len(valid) < BATCH_SIZE:
+
+        raise RuntimeError(
+            f"Only {len(valid)} valid duas found. "
+            f"At least {BATCH_SIZE} are required."
+        )
+
+    print(
+        f"Valid duas available: {len(valid)}"
+    )
+
+    return valid
 
 
 def choose_three_duas(duas):
@@ -551,29 +489,30 @@ def choose_three_duas(duas):
     )
 
     if not isinstance(used, list):
+
         used = []
 
-    used_set = set(
+    used = [
         str(x).strip()
         for x in used
+        if str(x).strip()
+    ]
+
+    used_set = set(used)
+
+    unused = [
+        dua
+        for dua in duas
+        if dua_identifier(dua)
+        not in used_set
+    ]
+
+    print(
+        f"Unused duas available: {len(unused)}"
     )
 
     # --------------------------------------------------------
-    # First preference: never-used duas
-    # --------------------------------------------------------
-
-    unused = []
-
-    for dua in duas:
-
-        identifier = dua_identifier(dua)
-
-        if identifier not in used_set:
-
-            unused.append(dua)
-
-    # --------------------------------------------------------
-    # If enough unused duas exist, choose from them
+    # Normal cycle
     # --------------------------------------------------------
 
     if len(unused) >= BATCH_SIZE:
@@ -583,130 +522,913 @@ def choose_three_duas(duas):
             BATCH_SIZE
         )
 
-    else:
+        return selected, used
 
-        # We have reached the end of the list.
-        # Start a new cycle, but still guarantee 3
-        # different videos in this batch.
+    # --------------------------------------------------------
+    # New cycle
+    # --------------------------------------------------------
 
-        print(
-            "All available duas have been used. "
-            "Starting a new cycle."
-        )
+    print(
+        "Not enough unused duas remain."
+    )
 
-        selected = random.sample(
-            duas,
-            BATCH_SIZE
-        )
+    print(
+        "Starting a new Dua cycle."
+    )
 
-        # Reset used list for the new cycle
-        used = []
+    selected = random.sample(
+        duas,
+        BATCH_SIZE
+    )
 
-    return selected, used
+    return selected, []
 
 
 # ============================================================
-# PEXELS BACKGROUND
+# QURANENC API
+# ============================================================
+
+def api_get(
+    url,
+    params=None,
+    attempts=3,
+    timeout=45
+):
+
+    last_error = None
+
+    for attempt in range(
+        1,
+        attempts + 1
+    ):
+
+        print(
+            f"QuranEnc request "
+            f"{attempt}/{attempts}: {url}"
+        )
+
+        try:
+
+            response = SESSION.get(
+                url,
+                params=params,
+                timeout=timeout
+            )
+
+            print(
+                f"HTTP status: {response.status_code}"
+            )
+
+            if response.status_code == 429:
+
+                print(
+                    "QuranEnc rate limit. Waiting..."
+                )
+
+                time.sleep(
+                    3 * attempt
+                )
+
+                continue
+
+            if response.status_code >= 500:
+
+                print(
+                    "QuranEnc server error. Retrying..."
+                )
+
+                time.sleep(
+                    2 * attempt
+                )
+
+                continue
+
+            response.raise_for_status()
+
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+
+            last_error = e
+
+            print(
+                f"Request error: {e}"
+            )
+
+            if attempt < attempts:
+
+                time.sleep(
+                    2 * attempt
+                )
+
+        except ValueError as e:
+
+            last_error = e
+
+            print(
+                f"Invalid JSON returned by QuranEnc: {e}"
+            )
+
+            if attempt < attempts:
+
+                time.sleep(
+                    2 * attempt
+                )
+
+    raise RuntimeError(
+        "QuranEnc request failed after "
+        f"{attempts} attempts.\n"
+        f"URL: {url}\n"
+        f"Last error: {last_error}"
+    )
+
+
+def get_translation_catalog():
+
+    urls = [
+        (
+            f"{QURANENC_API}/translations/"
+            f"list/ur"
+        ),
+        (
+            f"{QURANENC_API}/translations/"
+            f"list/ur/"
+        ),
+    ]
+
+    last_error = None
+
+    for url in urls:
+
+        try:
+
+            data = api_get(
+                url,
+                params={
+                    "localization": "ur"
+                },
+                attempts=2
+            )
+
+            if isinstance(data, list):
+
+                return data
+
+            if isinstance(data, dict):
+
+                for key in [
+                    "translations",
+                    "data",
+                    "results"
+                ]:
+
+                    value = data.get(key)
+
+                    if isinstance(value, list):
+
+                        return value
+
+        except Exception as e:
+
+            last_error = e
+
+            print(
+                f"Translation catalog attempt failed: {e}"
+            )
+
+    raise RuntimeError(
+        "Could not obtain QuranEnc translation catalog.\n"
+        f"Last error: {last_error}"
+    )
+
+
+def discover_urdu_translation():
+
+    catalog = get_translation_catalog()
+
+    print(
+        f"QuranEnc translations returned: "
+        f"{len(catalog)}"
+    )
+
+    # --------------------------------------------------------
+    # First: exact known key
+    # --------------------------------------------------------
+
+    for item in catalog:
+
+        if not isinstance(item, dict):
+
+            continue
+
+        key = str(
+            item.get("key", "")
+        ).strip()
+
+        if key == KNOWN_URDU_KEY:
+
+            version = str(
+                item.get(
+                    "version",
+                    "unknown"
+                )
+            )
+
+            title = str(
+                item.get(
+                    "title",
+                    ""
+                )
+            )
+
+            print(
+                f"Using QuranEnc translation: "
+                f"{key}"
+            )
+
+            print(
+                f"Translation title: {title}"
+            )
+
+            print(
+                f"Translation version: {version}"
+            )
+
+            return key, version, item
+
+    # --------------------------------------------------------
+    # Second: search Urdu + Junagarhi
+    # --------------------------------------------------------
+
+    for item in catalog:
+
+        if not isinstance(item, dict):
+
+            continue
+
+        key = str(
+            item.get("key", "")
+        ).strip()
+
+        title = str(
+            item.get("title", "")
+        ).lower()
+
+        description = str(
+            item.get("description", "")
+        ).lower()
+
+        combined = (
+            f"{key} {title} {description}"
+        ).lower()
+
+        if (
+            "junagarhi" in combined
+            or
+            "جوناگڑھی" in combined
+        ):
+
+            version = str(
+                item.get(
+                    "version",
+                    "unknown"
+                )
+            )
+
+            print(
+                f"Discovered Urdu translation: "
+                f"{key}"
+            )
+
+            print(
+                f"Translation version: {version}"
+            )
+
+            return key, version, item
+
+    # --------------------------------------------------------
+    # Last resort
+    # --------------------------------------------------------
+
+    print(
+        "Warning: Could not identify "
+        "Junagarhi translation dynamically."
+    )
+
+    print(
+        f"Using known key: {KNOWN_URDU_KEY}"
+    )
+
+    return (
+        KNOWN_URDU_KEY,
+        "unknown",
+        {}
+    )
+
+
+def clean_quran_translation(text):
+
+    if text is None:
+
+        return ""
+
+    text = str(text)
+
+    text = html.unescape(
+        text
+    )
+
+    text = unicodedata.normalize(
+        "NFKC",
+        text
+    )
+
+    # --------------------------------------------------------
+    # HTML
+    # --------------------------------------------------------
+
+    # Superscript footnotes
+    text = re.sub(
+        r"<sup[^>]*>.*?</sup>",
+        lambda m: (
+            ""
+            if re.search(
+                r"\d",
+                m.group(0)
+            )
+            else m.group(0)
+        ),
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Remove remaining HTML tags
+    text = re.sub(
+        r"<[^>]+>",
+        "",
+        text
+    )
+
+    # --------------------------------------------------------
+    # QuranEnc footnote markers
+    # --------------------------------------------------------
+
+    patterns = [
+
+        # [1]
+        r"[\[\［]\s*[0-9٠-٩]+\s*[\]\］]",
+
+        # ^{[1]}
+        r"\^\s*\{\s*[\[\［]\s*[0-9٠-٩]+\s*[\]\］]\s*\}",
+
+        # ^{1}
+        r"\^\s*\{\s*[0-9٠-٩]+\s*\}",
+
+        # ﴿1﴾
+        r"﴿\s*[0-9٠-٩]+\s*﴾",
+
+        # (1)
+        r"(?<![0-9٠-٩])\(\s*[0-9٠-٩]+\s*\)(?![0-9٠-٩])",
+
+        # full-width numeric footnotes
+        r"［\s*[0-9٠-٩]+\s*］",
+    ]
+
+    for pattern in patterns:
+
+        text = re.sub(
+            pattern,
+            "",
+            text
+        )
+
+    # --------------------------------------------------------
+    # Superscript Unicode numbers
+    # --------------------------------------------------------
+
+    text = re.sub(
+        r"[\u00B9\u00B2\u00B3\u2070-\u2079]",
+        "",
+        text
+    )
+
+    # --------------------------------------------------------
+    # Invisible Unicode
+    # --------------------------------------------------------
+
+    text = re.sub(
+        r"[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]",
+        "",
+        text
+    )
+
+    # Soft hyphen
+    text = text.replace(
+        "\u00AD",
+        ""
+    )
+
+    # --------------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------------
+
+    text = text.replace(
+        "\r",
+        " "
+    )
+
+    text = text.replace(
+        "\n",
+        " "
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+([،۔,.;:!?؟])",
+        r"\1",
+        text
+    )
+
+    return text.strip()
+
+
+def validate_translation(text):
+
+    if not text:
+
+        raise RuntimeError(
+            "QuranEnc returned an empty translation."
+        )
+
+    # These should never reach the video renderer.
+    forbidden = [
+        "□",
+        "�",
+        "<sup",
+        "</sup>",
+        "^{[",
+        "［1］",
+        "［2］",
+        "［3］",
+    ]
+
+    for item in forbidden:
+
+        if item in text:
+
+            raise RuntimeError(
+                "Translation contains an "
+                f"unwanted rendering marker: {item}"
+            )
+
+    # Make sure there is actually Urdu/Arabic text.
+    arabic_chars = re.findall(
+        r"[\u0600-\u06FF]",
+        text
+    )
+
+    if len(arabic_chars) < 5:
+
+        raise RuntimeError(
+            "QuranEnc translation does not contain "
+            "enough Arabic-script characters."
+        )
+
+    return text
+
+
+def fetch_ayah_translation(
+    translation_key,
+    sura,
+    ayah
+):
+
+    url = (
+        f"{QURANENC_API}/translation/"
+        f"aya/{translation_key}/"
+        f"{sura}/{ayah}"
+    )
+
+    data = api_get(
+        url,
+        attempts=3
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+
+        raise RuntimeError(
+            "Unexpected QuranEnc ayah response."
+        )
+
+    translation = data.get(
+        "translation"
+    )
+
+    if translation is None:
+
+        raise RuntimeError(
+            "QuranEnc ayah response does not "
+            "contain 'translation'."
+        )
+
+    return clean_quran_translation(
+        translation
+    )
+
+
+def fetch_sura_translation(
+    translation_key,
+    sura
+):
+
+    url = (
+        f"{QURANENC_API}/translation/"
+        f"sura/{translation_key}/{sura}"
+    )
+
+    data = api_get(
+        url,
+        attempts=3
+    )
+
+    if isinstance(data, dict):
+
+        for key in [
+            "translations",
+            "data",
+            "result"
+        ]:
+
+            if isinstance(
+                data.get(key),
+                list
+            ):
+
+                data = data[key]
+                break
+
+    if not isinstance(
+        data,
+        list
+    ):
+
+        raise RuntimeError(
+            "Unexpected QuranEnc sura response."
+        )
+
+    result = {}
+
+    for item in data:
+
+        if not isinstance(
+            item,
+            dict
+        ):
+
+            continue
+
+        aya = item.get("aya")
+
+        translation = item.get(
+            "translation"
+        )
+
+        if aya is None or translation is None:
+
+            continue
+
+        result[int(aya)] = (
+            clean_quran_translation(
+                translation
+            )
+        )
+
+    return result
+
+
+def fetch_quran_translation(
+    translation_key,
+    sura,
+    ayah,
+    ayah_end=None
+):
+
+    sura = int(sura)
+    ayah = int(ayah)
+
+    if ayah_end is None:
+
+        ayah_end = ayah
+
+    ayah_end = int(ayah_end)
+
+    if ayah_end < ayah:
+
+        raise RuntimeError(
+            f"Invalid ayah range: "
+            f"{sura}:{ayah}-{ayah_end}"
+        )
+
+    # --------------------------------------------------------
+    # Try individual API first
+    # --------------------------------------------------------
+
+    results = []
+
+    individual_failed = False
+
+    for current_ayah in range(
+        ayah,
+        ayah_end + 1
+    ):
+
+        print(
+            ""
+        )
+
+        print(
+            f"Fetching QuranEnc "
+            f"{sura}:{current_ayah}"
+        )
+
+        try:
+
+            translation = fetch_ayah_translation(
+                translation_key,
+                sura,
+                current_ayah
+            )
+
+            if translation:
+
+                results.append(
+                    translation
+                )
+
+        except Exception as e:
+
+            individual_failed = True
+
+            print(
+                "Individual ayah request failed:"
+            )
+
+            print(
+                str(e)
+            )
+
+            break
+
+    if (
+        not individual_failed
+        and len(results)
+        == (ayah_end - ayah + 1)
+    ):
+
+        final_text = clean_quran_translation(
+            " ".join(results)
+        )
+
+        return validate_translation(
+            final_text
+        )
+
+    # --------------------------------------------------------
+    # FALLBACK: COMPLETE SURA
+    # --------------------------------------------------------
+
+    print("")
+    print(
+        "Falling back to QuranEnc "
+        "complete-sura endpoint..."
+    )
+
+    sura_data = fetch_sura_translation(
+        translation_key,
+        sura
+    )
+
+    results = []
+
+    for current_ayah in range(
+        ayah,
+        ayah_end + 1
+    ):
+
+        if current_ayah not in sura_data:
+
+            raise RuntimeError(
+                f"QuranEnc did not return "
+                f"ayah {sura}:{current_ayah} "
+                f"from the complete-sura endpoint."
+            )
+
+        results.append(
+            sura_data[current_ayah]
+        )
+
+    final_text = clean_quran_translation(
+        " ".join(results)
+    )
+
+    return validate_translation(
+        final_text
+    )
+
+
+# ============================================================
+# PEXELS
 # ============================================================
 
 BACKGROUND_SEARCHES = [
     "mosque architecture night",
+    "beautiful mosque sunset",
     "islamic architecture",
-    "mosque sunset",
-    "islamic geometric pattern",
-    "beautiful mosque",
-    "ramadan mosque",
     "mosque interior",
-    "islamic art background",
+    "islamic geometric pattern",
+    "mosque evening",
+    "islamic architecture sunset",
 ]
+
+
+def pexels_get(
+    query,
+    attempts=3
+):
+
+    last_error = None
+
+    for attempt in range(
+        1,
+        attempts + 1
+    ):
+
+        try:
+
+            response = SESSION.get(
+                PEXELS_URL,
+                headers={
+                    "Authorization":
+                        PEXELS_API_KEY
+                },
+                params={
+                    "query": query,
+                    "orientation": "portrait",
+                    "size": "large",
+                    "per_page": 20,
+                    "page": random.randint(
+                        1,
+                        5
+                    )
+                },
+                timeout=45
+            )
+
+            print(
+                f"Pexels HTTP status: "
+                f"{response.status_code}"
+            )
+
+            response.raise_for_status()
+
+            return response.json()
+
+        except Exception as e:
+
+            last_error = e
+
+            print(
+                f"Pexels attempt "
+                f"{attempt}/{attempts} failed: "
+                f"{e}"
+            )
+
+            if attempt < attempts:
+
+                time.sleep(
+                    2 * attempt
+                )
+
+    raise RuntimeError(
+        "Pexels request failed.\n"
+        f"Last error: {last_error}"
+    )
 
 
 def download_background(index):
 
-    query = random.choice(
-        BACKGROUND_SEARCHES
+    queries = BACKGROUND_SEARCHES.copy()
+
+    random.shuffle(
+        queries
     )
 
-    headers = {
-        "Authorization": PEXELS_API_KEY
-    }
+    for query in queries:
 
-    params = {
-        "query": query,
-        "orientation": "portrait",
-        "size": "large",
-        "per_page": 20,
-        "page": random.randint(1, 5),
-    }
-
-    print(
-        f"Pexels background search: {query}"
-    )
-
-    response = requests.get(
-        PEXELS_URL,
-        headers=headers,
-        params=params,
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    photos = data.get(
-        "photos",
-        []
-    )
-
-    if not photos:
-
-        raise RuntimeError(
-            "Pexels returned no background images."
+        print(
+            ""
         )
 
-    # Shuffle to reduce repetition
-    random.shuffle(photos)
-
-    photo = photos[0]
-
-    src = photo.get("src", {})
-
-    image_url = (
-        src.get("portrait")
-        or src.get("large2x")
-        or src.get("large")
-    )
-
-    if not image_url:
-
-        raise RuntimeError(
-            "Pexels photo has no usable image URL."
+        print(
+            f"Pexels search: {query}"
         )
 
-    output = (
-        WORK_DIR /
-        f"background_{index}.jpg"
+        try:
+
+            data = pexels_get(
+                query
+            )
+
+            photos = data.get(
+                "photos",
+                []
+            )
+
+            if not photos:
+
+                continue
+
+            random.shuffle(
+                photos
+            )
+
+            for photo in photos:
+
+                src = photo.get(
+                    "src",
+                    {}
+                )
+
+                image_url = (
+                    src.get("portrait")
+                    or src.get("large2x")
+                    or src.get("large")
+                )
+
+                if not image_url:
+
+                    continue
+
+                output = (
+                    WORK_DIR /
+                    f"background_{index}.jpg"
+                )
+
+                response = SESSION.get(
+                    image_url,
+                    timeout=60
+                )
+
+                response.raise_for_status()
+
+                with open(
+                    output,
+                    "wb"
+                ) as f:
+
+                    f.write(
+                        response.content
+                    )
+
+                if output.stat().st_size < 10000:
+
+                    continue
+
+                print(
+                    f"Background downloaded: "
+                    f"{output}"
+                )
+
+                return output
+
+        except Exception as e:
+
+            print(
+                f"Pexels query failed: {e}"
+            )
+
+    raise RuntimeError(
+        "Could not download a usable "
+        "Pexels background."
     )
-
-    image_response = requests.get(
-        image_url,
-        timeout=60
-    )
-
-    image_response.raise_for_status()
-
-    with open(output, "wb") as f:
-        f.write(image_response.content)
-
-    return output
 
 
 # ============================================================
-# IMAGE HELPERS
+# IMAGE / TEXT HELPERS
 # ============================================================
 
-def load_font(path, size):
+def load_font(
+    path,
+    size
+):
 
     return ImageFont.truetype(
         path,
@@ -714,9 +1436,15 @@ def load_font(path, size):
     )
 
 
-def text_width(draw, text, font, direction="rtl", language="ur"):
+def text_width(
+    draw,
+    text,
+    font,
+    direction="rtl",
+    language="ur"
+):
 
-    bbox = draw.textbbox(
+    box = draw.textbbox(
         (0, 0),
         text,
         font=font,
@@ -724,7 +1452,9 @@ def text_width(draw, text, font, direction="rtl", language="ur"):
         language=language
     )
 
-    return bbox[2] - bbox[0]
+    return (
+        box[2] - box[0]
+    )
 
 
 def wrap_text(
@@ -736,12 +1466,14 @@ def wrap_text(
     language="ur"
 ):
 
-    words = text.split()
+    words = str(text).split()
 
     if not words:
+
         return []
 
     lines = []
+
     current = ""
 
     for word in words:
@@ -767,19 +1499,23 @@ def wrap_text(
         else:
 
             if current:
-                lines.append(current)
 
-            # If one word itself is too long,
-            # keep it rather than deleting content.
+                lines.append(
+                    current
+                )
+
             current = word
 
     if current:
-        lines.append(current)
+
+        lines.append(
+            current
+        )
 
     return lines
 
 
-def fit_text_lines(
+def fit_text(
     draw,
     text,
     font_path,
@@ -789,12 +1525,14 @@ def fit_text_lines(
     max_height,
     direction,
     language,
-    spacing
+    line_gap=4
 ):
 
-    size = start_size
-
-    while size >= min_size:
+    for size in range(
+        start_size,
+        min_size - 1,
+        -2
+    ):
 
         font = load_font(
             font_path,
@@ -811,12 +1549,18 @@ def fit_text_lines(
         )
 
         line_height = int(
-            size * 1.55
+            size * 1.45
         )
 
         total_height = (
-            len(lines) * line_height
-            + max(0, len(lines) - 1) * spacing
+            len(lines)
+            * line_height
+            +
+            max(
+                0,
+                len(lines) - 1
+            )
+            * line_gap
         )
 
         if total_height <= max_height:
@@ -828,9 +1572,6 @@ def fit_text_lines(
                 total_height
             )
 
-        size -= 2
-
-    # Final fallback at minimum size
     font = load_font(
         font_path,
         min_size
@@ -846,12 +1587,18 @@ def fit_text_lines(
     )
 
     line_height = int(
-        min_size * 1.55
+        min_size * 1.45
     )
 
     total_height = (
-        len(lines) * line_height
-        + max(0, len(lines) - 1) * spacing
+        len(lines)
+        * line_height
+        +
+        max(
+            0,
+            len(lines) - 1
+        )
+        * line_gap
     )
 
     return (
@@ -872,14 +1619,14 @@ def draw_centered_lines(
     fill,
     direction,
     language,
-    spacing=0
+    gap=4
 ):
 
     y = top_y
 
     for line in lines:
 
-        bbox = draw.textbbox(
+        box = draw.textbbox(
             (0, 0),
             line,
             font=font,
@@ -888,10 +1635,13 @@ def draw_centered_lines(
         )
 
         width = (
-            bbox[2] - bbox[0]
+            box[2] - box[0]
         )
 
-        x = center_x - width / 2
+        x = (
+            center_x
+            - width / 2
+        )
 
         draw.text(
             (x, y),
@@ -902,50 +1652,31 @@ def draw_centered_lines(
             language=language
         )
 
-        y += line_height + spacing
+        y += (
+            line_height
+            + gap
+        )
 
     return y
 
 
 # ============================================================
-# DECORATIONS
+# DECORATION
 # ============================================================
 
-def draw_corner_geometry(draw):
+def draw_decorations(draw):
 
-    # Top-left
-    for offset in range(0, 80, 18):
+    center = WIDTH // 2
 
-        draw.line(
-            [
-                (80 + offset, 90),
-                (160 + offset, 90),
-            ],
-            fill=GOLD,
-            width=2
-        )
+    # Top ornamental diamond
 
-    # Top-right
-    for offset in range(0, 80, 18):
-
-        draw.line(
-            [
-                (920 - offset, 90),
-                (1000 - offset, 90),
-            ],
-            fill=GOLD,
-            width=2
-        )
-
-    # Decorative diamond
-    cx = WIDTH // 2
-    cy = 82
+    cy = 72
 
     points = [
-        (cx, cy - 20),
-        (cx + 20, cy),
-        (cx, cy + 20),
-        (cx - 20, cy),
+        (center, cy - 18),
+        (center + 18, cy),
+        (center, cy + 18),
+        (center - 18, cy),
     ]
 
     draw.polygon(
@@ -956,13 +1687,58 @@ def draw_corner_geometry(draw):
 
     draw.ellipse(
         (
-            cx - 5,
-            cy - 5,
-            cx + 5,
-            cy + 5
+            center - 4,
+            cy - 4,
+            center + 4,
+            cy + 4
         ),
         fill=GOLD
     )
+
+    # Horizontal ornaments
+
+    draw.line(
+        (
+            130,
+            72,
+            385,
+            72
+        ),
+        fill=GOLD,
+        width=2
+    )
+
+    draw.line(
+        (
+            695,
+            72,
+            950,
+            72
+        ),
+        fill=GOLD,
+        width=2
+    )
+
+    # Small dots
+
+    for x in [
+        110,
+        130,
+        150,
+        930,
+        950,
+        970
+    ]:
+
+        draw.ellipse(
+            (
+                x - 3,
+                68,
+                x + 3,
+                74
+            ),
+            fill=GOLD
+        )
 
 
 # ============================================================
@@ -977,42 +1753,60 @@ def create_poster(
 
     image = Image.new(
         "RGBA",
-        (WIDTH, HEIGHT),
-        (0, 0, 0, 0)
+        (
+            WIDTH,
+            HEIGHT
+        ),
+        (
+            0,
+            0,
+            0,
+            0
+        )
     )
 
     # --------------------------------------------------------
-    # Shadow layer
+    # Card shadow
     # --------------------------------------------------------
 
     shadow = Image.new(
         "RGBA",
-        (WIDTH, HEIGHT),
-        (0, 0, 0, 0)
+        (
+            WIDTH,
+            HEIGHT
+        ),
+        (
+            0,
+            0,
+            0,
+            0
+        )
     )
 
     shadow_draw = ImageDraw.Draw(
         shadow
     )
 
-    card_x1 = 70
-    card_y1 = 145
-    card_x2 = WIDTH - 70
-    card_y2 = HEIGHT - 125
-
     shadow_draw.rounded_rectangle(
         (
-            card_x1 + 10,
-            card_y1 + 15,
-            card_x2 + 10,
-            card_y2 + 15
+            CARD_X1 + 12,
+            CARD_Y1 + 18,
+            CARD_X2 + 12,
+            CARD_Y2 + 18
         ),
         radius=48,
-        fill=(0, 0, 0, 150)
+        fill=(
+            0,
+            0,
+            0,
+            160
+        )
     )
 
     shadow = shadow.filter(
-        ImageFilter.GaussianBlur(18)
+        ImageFilter.GaussianBlur(
+            22
+        )
     )
 
     image.alpha_composite(
@@ -1029,36 +1823,40 @@ def create_poster(
 
     draw.rounded_rectangle(
         (
-            card_x1,
-            card_y1,
-            card_x2,
-            card_y2
+            CARD_X1,
+            CARD_Y1,
+            CARD_X2,
+            CARD_Y2
         ),
         radius=48,
-        fill=CARD,
+        fill=CREAM,
         outline=GOLD,
         width=4
     )
 
-    # Inner border
     draw.rounded_rectangle(
         (
-            card_x1 + 15,
-            card_y1 + 15,
-            card_x2 - 15,
-            card_y2 - 15
+            CARD_X1 + 16,
+            CARD_Y1 + 16,
+            CARD_X2 - 16,
+            CARD_Y2 - 16
         ),
         radius=38,
-        outline=(198, 157, 72, 80),
+        outline=(
+            205,
+            168,
+            92,
+            70
+        ),
         width=2
     )
 
-    draw_corner_geometry(
+    draw_decorations(
         draw
     )
 
     # --------------------------------------------------------
-    # Values
+    # Data
     # --------------------------------------------------------
 
     title = get_dua_field(
@@ -1077,6 +1875,13 @@ def create_poster(
         "reference_text"
     )
 
+    arabic = get_dua_field(
+        dua,
+        "arabic",
+        "dua",
+        "text"
+    )
+
     context = get_dua_field(
         dua,
         "context",
@@ -1085,54 +1890,46 @@ def create_poster(
         default=""
     )
 
-    arabic = get_dua_field(
-        dua,
-        "arabic",
-        "dua",
-        "text"
-    )
-
     # --------------------------------------------------------
-    # Title
+    # TITLE
     # --------------------------------------------------------
 
     title_font = load_font(
         TITLE_FONT,
-        62
+        58
     )
 
     title_lines = wrap_text(
         draw,
-        str(title),
+        title,
         title_font,
-        850,
-        direction="rtl",
-        language="ur"
+        830,
+        "rtl",
+        "ur"
     )
 
-    y = 205
+    title_y = 175
 
-    y = draw_centered_lines(
+    title_y = draw_centered_lines(
         draw,
         title_lines,
         title_font,
         WIDTH // 2,
-        y,
-        85,
+        title_y,
+        78,
         GOLD,
         "rtl",
         "ur",
-        spacing=4
+        gap=3
     )
 
-    # Divider
-    divider_y = y + 20
+    divider_y = title_y + 12
 
     draw.line(
         (
-            225,
+            230,
             divider_y,
-            855,
+            850,
             divider_y
         ),
         fill=GOLD,
@@ -1140,44 +1937,58 @@ def create_poster(
     )
 
     # --------------------------------------------------------
-    # Arabic panel
+    # ARABIC BOX
     # --------------------------------------------------------
 
-    arabic_box_top = divider_y + 45
-    arabic_box_bottom = arabic_box_top + 390
+    arabic_top = divider_y + 35
+    arabic_bottom = arabic_top + 355
 
     draw.rounded_rectangle(
         (
             105,
-            arabic_box_top,
+            arabic_top,
             975,
-            arabic_box_bottom
+            arabic_bottom
         ),
-        radius=35,
-        fill=(255, 255, 255, 85),
-        outline=(198, 157, 72, 90),
+        radius=32,
+        fill=(
+            255,
+            255,
+            255,
+            90
+        ),
+        outline=(
+            205,
+            168,
+            92,
+            80
+        ),
         width=2
     )
 
-    arabic_font, arabic_lines, arabic_line_height, arabic_total = fit_text_lines(
+    arabic_font, arabic_lines, arabic_line_height, arabic_height = fit_text(
         draw,
-        str(arabic),
+        arabic,
         ARABIC_FONT,
-        start_size=62,
-        min_size=42,
-        max_width=790,
-        max_height=315,
-        direction="rtl",
-        language="ar",
-        spacing=2
+        62,
+        42,
+        790,
+        280,
+        "rtl",
+        "ar",
+        3
     )
 
-    arabic_start = (
-        arabic_box_top
+    arabic_y = (
+        arabic_top
         + (
-            (arabic_box_bottom - arabic_box_top)
-            - arabic_total
-        ) / 2
+            (
+                arabic_bottom
+                - arabic_top
+            )
+            - arabic_height
+        )
+        / 2
     )
 
     draw_centered_lines(
@@ -1185,85 +1996,102 @@ def create_poster(
         arabic_lines,
         arabic_font,
         WIDTH // 2,
-        int(arabic_start),
+        int(arabic_y),
         arabic_line_height,
         DARK_TEXT,
         "rtl",
         "ar",
-        spacing=2
+        gap=3
     )
 
     # --------------------------------------------------------
-    # Urdu meaning
+    # URDU TRANSLATION
     # --------------------------------------------------------
 
-    urdu_box_top = arabic_box_bottom + 35
-    urdu_box_bottom = urdu_box_top + 470
+    urdu_top = arabic_bottom + 30
+    urdu_bottom = urdu_top + 465
 
     draw.rounded_rectangle(
         (
             105,
-            urdu_box_top,
+            urdu_top,
             975,
-            urdu_box_bottom
+            urdu_bottom
         ),
-        radius=35,
-        fill=(255, 255, 255, 55),
-        outline=(198, 157, 72, 70),
+        radius=32,
+        fill=(
+            255,
+            255,
+            255,
+            65
+        ),
+        outline=(
+            205,
+            168,
+            92,
+            65
+        ),
         width=2
     )
 
-    meaning_label_font = load_font(
+    label_font = load_font(
         TITLE_FONT,
-        34
+        32
     )
 
     label = "اردو ترجمہ"
 
-    bbox = draw.textbbox(
+    label_box = draw.textbbox(
         (0, 0),
         label,
-        font=meaning_label_font,
+        font=label_font,
         direction="rtl",
         language="ur"
     )
 
     label_width = (
-        bbox[2] - bbox[0]
+        label_box[2]
+        - label_box[0]
     )
 
     draw.text(
         (
-            WIDTH // 2 - label_width / 2,
-            urdu_box_top + 22
+            WIDTH // 2
+            - label_width / 2,
+            urdu_top + 18
         ),
         label,
-        font=meaning_label_font,
+        font=label_font,
         fill=GOLD,
         direction="rtl",
         language="ur"
     )
 
-    meaning_font, meaning_lines, meaning_line_height, meaning_total = fit_text_lines(
+    meaning_font, meaning_lines, meaning_line_height, meaning_height = fit_text(
         draw,
         translation,
         URDU_FONT,
-        start_size=40,
-        min_size=28,
-        max_width=790,
-        max_height=355,
-        direction="rtl",
-        language="ur",
-        spacing=2
+        39,
+        27,
+        790,
+        355,
+        "rtl",
+        "ur",
+        2
     )
 
-    meaning_start = (
-        urdu_box_top
-        + 85
+    meaning_y = (
+        urdu_top
+        + 78
         + (
-            (urdu_box_bottom - urdu_box_top - 85)
-            - meaning_total
-        ) / 2
+            (
+                urdu_bottom
+                - urdu_top
+                - 78
+            )
+            - meaning_height
+        )
+        / 2
     )
 
     draw_centered_lines(
@@ -1271,49 +2099,51 @@ def create_poster(
         meaning_lines,
         meaning_font,
         WIDTH // 2,
-        int(meaning_start),
+        int(meaning_y),
         meaning_line_height,
         DARK_TEXT,
         "rtl",
         "ur",
-        spacing=2
+        gap=2
     )
 
     # --------------------------------------------------------
-    # Reference badge
+    # REFERENCE BADGE
     # --------------------------------------------------------
 
-    ref_y = urdu_box_bottom + 32
+    ref_y = urdu_bottom + 28
 
     ref_font = load_font(
         ENGLISH_FONT,
-        32
+        28
     )
 
     ref_text = (
-        f"Quran {reference}"
-        if reference
-        else "Quran"
+        f"Quran • {reference}"
     )
 
-    ref_bbox = draw.textbbox(
+    ref_box = draw.textbbox(
         (0, 0),
         ref_text,
         font=ref_font
     )
 
     ref_width = (
-        ref_bbox[2] - ref_bbox[0]
-        + 80
+        ref_box[2]
+        - ref_box[0]
+        + 90
     )
 
-    ref_height = 62
+    ref_height = 60
 
     ref_x1 = (
         WIDTH - ref_width
     ) // 2
 
-    ref_x2 = ref_x1 + ref_width
+    ref_x2 = (
+        ref_x1
+        + ref_width
+    )
 
     draw.rounded_rectangle(
         (
@@ -1322,7 +2152,7 @@ def create_poster(
             ref_x2,
             ref_y + ref_height
         ),
-        radius=31,
+        radius=30,
         fill=GREEN
     )
 
@@ -1338,25 +2168,34 @@ def create_poster(
     )
 
     # --------------------------------------------------------
-    # Context
+    # CONTEXT
     # --------------------------------------------------------
 
     if context:
 
-        context_top = ref_y + ref_height + 30
-        context_bottom = HEIGHT - 165
+        context_top = (
+            ref_y
+            + ref_height
+            + 25
+        )
 
-        context_font, context_lines, context_line_height, context_total = fit_text_lines(
+        context_height = (
+            HEIGHT
+            - context_top
+            - 155
+        )
+
+        context_font, context_lines, context_line_height, context_total = fit_text(
             draw,
-            str(context),
+            context,
             URDU_FONT,
-            start_size=31,
-            min_size=23,
-            max_width=770,
-            max_height=context_bottom - context_top - 30,
-            direction="rtl",
-            language="ur",
-            spacing=1
+            29,
+            21,
+            770,
+            context_height,
+            "rtl",
+            "ur",
+            1
         )
 
         draw_centered_lines(
@@ -1369,7 +2208,7 @@ def create_poster(
             MUTED_TEXT,
             "rtl",
             "ur",
-            spacing=1
+            gap=1
         )
 
     # --------------------------------------------------------
@@ -1378,10 +2217,10 @@ def create_poster(
 
     draw.line(
         (
-            320,
-            HEIGHT - 105,
-            760,
-            HEIGHT - 105
+            340,
+            HEIGHT - 98,
+            740,
+            HEIGHT - 98
         ),
         fill=GOLD,
         width=2
@@ -1392,17 +2231,22 @@ def create_poster(
         "PNG"
     )
 
+    print(
+        f"Poster created: {output_path}"
+    )
+
     return output_path
 
 
 # ============================================================
-# SOCIAL MEDIA TEXT
+# SOCIAL MEDIA
 # ============================================================
 
 def make_social_text(
     dua,
     translation,
-    quranenc_version,
+    translation_key,
+    translation_version,
     video_number
 ):
 
@@ -1415,18 +2259,18 @@ def make_social_text(
         default="قرآنی دعا"
     )
 
-    title_en = get_dua_field(
-        dua,
-        "title_en",
-        "english_title",
-        default=""
-    )
-
     reference = get_dua_field(
         dua,
         "reference",
         "ref",
         "reference_text"
+    )
+
+    arabic = get_dua_field(
+        dua,
+        "arabic",
+        "dua",
+        "text"
     )
 
     context = get_dua_field(
@@ -1437,32 +2281,14 @@ def make_social_text(
         default=""
     )
 
-    arabic = get_dua_field(
-        dua,
-        "arabic",
-        "dua",
-        "text"
+    youtube_title = (
+        f"{title} | Quranic Dua "
+        f"#{reference}"
     )
 
-    # --------------------------------------------------------
-    # YouTube
-    # --------------------------------------------------------
+    youtube_description = f"""{title}
 
-    if title_en:
-
-        youtube_title = (
-            f"{title} | {title_en} | "
-            f"Quranic Dua #{reference}"
-        )
-
-    else:
-
-        youtube_title = (
-            f"{title} | قرآن کی خوبصورت دعا "
-            f"#{reference}"
-        )
-
-    youtube_description = f"""ایک خوبصورت قرآنی دعا یاد کریں اور اسے اپنی روزمرہ زندگی میں پڑھیں۔
+قرآن کریم کی یہ خوبصورت دعا یاد کریں اور اپنی روزمرہ زندگی میں پڑھیں۔
 
 دعا:
 {arabic}
@@ -1471,32 +2297,35 @@ def make_social_text(
 {translation}
 
 حوالہ:
-سورۃ/آیت {reference}
+{reference}
 
 پس منظر:
 {context}
 
-یہ ویڈیو قرآن کریم کے معنی کے مستند اردو ترجمہ کی بنیاد پر تیار کی گئی ہے۔
+اللہ تعالیٰ ہمیں قرآن کریم سمجھنے اور اس پر عمل کرنے کی توفیق عطا فرمائے۔ آمین۔
 
-Translation Source:
+قرآن کے اردو معنی کا ماخذ:
 QuranEnc.com
 
 Urdu Translation:
 Muhammad Junagarhi
 
-QuranEnc Translation Version:
-{quranenc_version}
-
-اللہ تعالیٰ ہمیں قرآن کریم سمجھنے اور اس پر عمل کرنے کی توفیق عطا فرمائے۔ آمین۔
+Translation Version:
+{translation_version}
 
 #Quran #QuranicDua #Dua #IslamicShorts #IslamicReminder #UrduIslamic #QuranReminder
 """
 
     youtube_hashtags = (
-        "#Quran #QuranicDua #Dua "
-        "#IslamicShorts #IslamicReminder "
-        "#UrduIslamic #QuranReminder "
-        "#IslamicVideo #Muslim"
+        "#Quran "
+        "#QuranicDua "
+        "#Dua "
+        "#IslamicShorts "
+        "#IslamicReminder "
+        "#UrduIslamic "
+        "#QuranReminder "
+        "#IslamicVideo "
+        "#Muslim"
     )
 
     youtube_tags = (
@@ -1507,10 +2336,6 @@ QuranEnc Translation Version:
         "Islamic Status, Urdu Islamic Shorts"
     )
 
-    # --------------------------------------------------------
-    # TikTok
-    # --------------------------------------------------------
-
     tiktok_caption = f"""{title}
 
 {arabic}
@@ -1518,7 +2343,8 @@ QuranEnc Translation Version:
 اردو ترجمہ:
 {translation}
 
-حوالہ: {reference}
+حوالہ:
+{reference}
 
 قرآن کریم کی دعاؤں کو یاد کریں اور دوسروں تک بھی پہنچائیں۔
 
@@ -1526,35 +2352,37 @@ QuranEnc Translation Version:
 """
 
     tiktok_hashtags = (
-        "#Quran #Dua #QuranicDua "
-        "#IslamicTok #IslamicReminder "
-        "#UrduIslamic #Muslim "
-        "#QuranReminder #IslamicVideo "
+        "#Quran "
+        "#Dua "
+        "#QuranicDua "
+        "#IslamicTok "
+        "#IslamicReminder "
+        "#UrduIslamic "
+        "#Muslim "
+        "#QuranReminder "
+        "#IslamicVideo "
         "#IslamicContent"
     )
-
-    # --------------------------------------------------------
-    # TXT
-    # --------------------------------------------------------
 
     return f"""============================================================
 ISLAMIC QURANIC DUA VIDEO {video_number}
 ============================================================
 
-TITLE
+TITLE:
 {title}
 
-REFERENCE
+REFERENCE:
 {reference}
 
-ARABIC DUA
+ARABIC DUA:
 {arabic}
 
-URDU MEANING
+URDU MEANING:
 {translation}
 
-CONTEXT / STORY
+CONTEXT:
 {context}
+
 
 ============================================================
 YOUTUBE
@@ -1563,15 +2391,21 @@ YOUTUBE
 TITLE:
 {youtube_title}
 
+
 DESCRIPTION:
 
 {youtube_description}
 
+
 HASHTAGS:
+
 {youtube_hashtags}
 
+
 TAGS:
+
 {youtube_tags}
+
 
 ============================================================
 TIKTOK
@@ -1581,26 +2415,28 @@ CAPTION:
 
 {tiktok_caption}
 
+
 HASHTAGS:
+
 {tiktok_hashtags}
 
+
 ============================================================
-SOURCE INFORMATION
+SOURCE
 ============================================================
 
 Quran Translation Source:
 QuranEnc.com
 
-Urdu Translation:
+Translation:
 Muhammad Junagarhi
 
 Translation Key:
-{QURANENC_TRANSLATION_KEY}
+{translation_key}
 
 Translation Version:
-{quranenc_version}
+{translation_version}
 
-The Quranic meaning is retrieved from the QuranEnc API.
 
 ============================================================
 VIDEO
@@ -1612,6 +2448,9 @@ Resolution:
 Duration:
 60 seconds
 
+FPS:
+24
+
 Format:
 MP4 / H.264
 
@@ -1620,7 +2459,7 @@ MP4 / H.264
 
 
 # ============================================================
-# VIDEO CREATION
+# VIDEO
 # ============================================================
 
 def create_video(
@@ -1629,7 +2468,10 @@ def create_video(
     output_video
 ):
 
-    frames = FPS * VIDEO_SECONDS
+    total_frames = (
+        FPS
+        * VIDEO_SECONDS
+    )
 
     filter_complex = (
         "[0:v]"
@@ -1638,13 +2480,14 @@ def create_video(
         "crop=1080:1920,"
         "eq=brightness=-0.08:saturation=0.82,"
         "zoompan="
-        "z='min(zoom+0.00018,1.08)':"
+        "z='min(zoom+0.00015,1.07)':"
         "x='iw/2-(iw/zoom/2)':"
         "y='ih/2-(ih/zoom/2)':"
-        f"d={frames}:"
+        f"d={total_frames}:"
         "s=1080x1920:"
         "fps=24"
         "[bg];"
+
         "[bg][1:v]"
         "overlay=0:0:"
         "format=auto,"
@@ -1658,16 +2501,19 @@ def create_video(
 
         "-loop",
         "1",
+
         "-i",
         str(background),
 
         "-loop",
         "1",
+
         "-i",
         str(poster),
 
         "-stream_loop",
         "-1",
+
         "-i",
         str(AUDIO_FILE),
 
@@ -1707,12 +2553,14 @@ def create_video(
         "-movflags",
         "+faststart",
 
-        str(output_video),
+        "-shortest",
+
+        str(output_video)
     ]
 
+    print("")
     print(
-        "Creating video:",
-        output_video
+        f"Creating video: {output_video.name}"
     )
 
     result = subprocess.run(
@@ -1723,28 +2571,51 @@ def create_video(
 
     if result.returncode != 0:
 
-        print(result.stdout)
-        print(result.stderr)
+        print("")
+        print(
+            "FFmpeg STDOUT:"
+        )
+
+        print(
+            result.stdout[-5000:]
+        )
+
+        print("")
+        print(
+            "FFmpeg STDERR:"
+        )
+
+        print(
+            result.stderr[-10000:]
+        )
 
         raise RuntimeError(
-            f"FFmpeg failed for {output_video}"
+            "FFmpeg failed."
         )
 
     if not output_video.exists():
 
         raise RuntimeError(
-            f"Video was not created: {output_video}"
+            "FFmpeg completed but video "
+            "file was not created."
         )
 
-    if output_video.stat().st_size < 10000:
+    size_mb = (
+        output_video.stat().st_size
+        / 1024
+        / 1024
+    )
+
+    if size_mb < 0.05:
 
         raise RuntimeError(
-            f"Video file appears invalid: {output_video}"
+            f"Video appears invalid: "
+            f"{size_mb:.3f} MB"
         )
 
     print(
-        f"Video created: "
-        f"{output_video.stat().st_size / 1024 / 1024:.2f} MB"
+        f"Video created successfully: "
+        f"{size_mb:.2f} MB"
     )
 
 
@@ -1752,17 +2623,21 @@ def create_video(
 # ZIP
 # ============================================================
 
-def create_zip(batch_dir, zip_path):
+def create_zip(
+    batch_dir,
+    zip_path
+):
 
+    print("")
     print(
-        "Creating single ZIP:"
+        "Creating ONE ZIP..."
     )
 
     with zipfile.ZipFile(
         zip_path,
         "w",
         compression=zipfile.ZIP_DEFLATED
-    ) as zip_file:
+    ) as archive:
 
         for file in sorted(
             batch_dir.iterdir()
@@ -1770,7 +2645,7 @@ def create_zip(batch_dir, zip_path):
 
             if file.is_file():
 
-                zip_file.write(
+                archive.write(
                     file,
                     arcname=file.name
                 )
@@ -1778,12 +2653,18 @@ def create_zip(batch_dir, zip_path):
     if not zip_path.exists():
 
         raise RuntimeError(
-            "ZIP file was not created."
+            "ZIP creation failed."
         )
+
+    size_mb = (
+        zip_path.stat().st_size
+        / 1024
+        / 1024
+    )
 
     print(
         f"ZIP created: "
-        f"{zip_path.stat().st_size / 1024 / 1024:.2f} MB"
+        f"{size_mb:.2f} MB"
     )
 
 
@@ -1797,12 +2678,34 @@ def main():
     print("=" * 70)
     print("ISLAMIC QURANIC DUA VIDEO AUTOMATION")
     print("=" * 70)
-    print("")
+
+    # --------------------------------------------------------
+    # Prepare
+    # --------------------------------------------------------
 
     check_environment()
 
-    clean_output_folder()
-    clean_work_folder()
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    WORK_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    clean_folder(
+        OUTPUT_DIR
+    )
+
+    clean_folder(
+        WORK_DIR
+    )
+
+    # --------------------------------------------------------
+    # Load duas
+    # --------------------------------------------------------
 
     duas = load_duas()
 
@@ -1812,25 +2715,61 @@ def main():
 
     print("")
     print(
-        f"Selected {len(selected_duas)} different duas."
+        "SELECTED 3 DIFFERENT DUAS"
     )
 
-    quranenc_version = (
-        get_quranenc_version()
+    for number, dua in enumerate(
+        selected_duas,
+        start=1
+    ):
+
+        print(
+            f"{number}. "
+            f"{get_dua_field(dua, 'title', 'name')}"
+        )
+
+        print(
+            f"   {get_dua_field(dua, 'reference', 'ref')}"
+        )
+
+    # --------------------------------------------------------
+    # QuranEnc translation discovery
+    # --------------------------------------------------------
+
+    print("")
+    print(
+        "=" * 70
     )
 
     print(
-        "QuranEnc version:",
-        quranenc_version
+        "QURANENC TRANSLATION DISCOVERY"
     )
+
+    translation_key, translation_version, translation_info = (
+        discover_urdu_translation()
+    )
+
+    print(
+        f"Final translation key: "
+        f"{translation_key}"
+    )
+
+    print(
+        f"Final translation version: "
+        f"{translation_version}"
+    )
+
+    # --------------------------------------------------------
+    # Batch folder
+    # --------------------------------------------------------
 
     timestamp = datetime.now().strftime(
         "%Y%m%d_%H%M%S"
     )
 
     batch_dir = (
-        OUTPUT_DIR /
-        f"batch_{timestamp}"
+        OUTPUT_DIR
+        / f"batch_{timestamp}"
     )
 
     batch_dir.mkdir(
@@ -1838,13 +2777,13 @@ def main():
         exist_ok=True
     )
 
-    new_used = list(old_used)
+    new_used = list(
+        old_used
+    )
 
-    created_videos = []
-
-    # ========================================================
-    # CREATE 3 VIDEOS
-    # ========================================================
+    # --------------------------------------------------------
+    # Create 3 videos
+    # --------------------------------------------------------
 
     for index, dua in enumerate(
         selected_duas,
@@ -1853,10 +2792,38 @@ def main():
 
         print("")
         print("=" * 70)
+
         print(
             f"CREATING VIDEO {index}/{BATCH_SIZE}"
         )
+
         print("=" * 70)
+
+        sura = int(
+            get_dua_field(
+                dua,
+                "sura",
+                "surah"
+            )
+        )
+
+        ayah = int(
+            get_dua_field(
+                dua,
+                "ayah",
+                "aya",
+                "verse"
+            )
+        )
+
+        ayah_end = int(
+            get_dua_field(
+                dua,
+                "ayah_end",
+                "aya_end",
+                default=ayah
+            )
+        )
 
         reference = get_dua_field(
             dua,
@@ -1865,41 +2832,38 @@ def main():
             "reference_text"
         )
 
-        sura = get_dua_field(
-            dua,
-            "sura",
-            "surah"
+        print(
+            f"Reference: {reference}"
         )
 
-        ayah = get_dua_field(
-            dua,
-            "ayah",
-            "aya",
-            "verse"
-        )
-
-        ayah_end = get_dua_field(
-            dua,
-            "ayah_end",
-            "aya_end",
-            default=ayah
-        )
-
-        if not sura or not ayah:
-
-            raise RuntimeError(
-                f"Dua {index} is missing "
-                f"sura/ayah information: {dua}"
+        print(
+            f"Quran: {sura}:{ayah}"
+            + (
+                f"-{ayah_end}"
+                if ayah_end != ayah
+                else ""
             )
+        )
 
         # ----------------------------------------------------
-        # Fetch exact QuranEnc Urdu meaning
+        # Urdu translation
         # ----------------------------------------------------
 
         translation = fetch_quran_translation(
-            int(sura),
-            int(ayah),
-            int(ayah_end)
+            translation_key,
+            sura,
+            ayah,
+            ayah_end
+        )
+
+        print("")
+        print(
+            "Translation successfully obtained."
+        )
+
+        print(
+            f"Translation length: "
+            f"{len(translation)} characters"
         )
 
         # ----------------------------------------------------
@@ -1915,8 +2879,8 @@ def main():
         # ----------------------------------------------------
 
         poster = (
-            WORK_DIR /
-            f"poster_{index}.png"
+            WORK_DIR
+            / f"poster_{index}.png"
         )
 
         create_poster(
@@ -1929,13 +2893,9 @@ def main():
         # Video
         # ----------------------------------------------------
 
-        video_name = (
-            f"dua_{index:02d}.mp4"
-        )
-
         video_path = (
-            batch_dir /
-            video_name
+            batch_dir
+            / f"dua_{index:02d}.mp4"
         )
 
         create_video(
@@ -1945,45 +2905,35 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Social metadata TXT
+        # Social text
         # ----------------------------------------------------
 
-        text_name = (
-            f"dua_{index:02d}_social_media.txt"
-        )
-
-        text_path = (
-            batch_dir /
-            text_name
+        social_path = (
+            batch_dir
+            / f"dua_{index:02d}_social_media.txt"
         )
 
         social_text = make_social_text(
             dua,
             translation,
-            quranenc_version,
+            translation_key,
+            translation_version,
             index
         )
 
-        with open(
-            text_path,
-            "w",
+        social_path.write_text(
+            social_text,
             encoding="utf-8"
-        ) as f:
-
-            f.write(
-                social_text
-            )
+        )
 
         # ----------------------------------------------------
-        # Individual metadata JSON
+        # Metadata JSON
         # ----------------------------------------------------
 
         metadata = {
+
             "video_number": index,
-            "reference": reference,
-            "sura": int(sura),
-            "ayah_start": int(ayah),
-            "ayah_end": int(ayah_end),
+
             "title": get_dua_field(
                 dua,
                 "title",
@@ -1991,24 +2941,37 @@ def main():
                 "topic",
                 "name"
             ),
+
+            "reference": reference,
+
+            "sura": sura,
+
+            "ayah_start": ayah,
+
+            "ayah_end": ayah_end,
+
             "arabic": get_dua_field(
                 dua,
                 "arabic",
                 "dua",
                 "text"
             ),
+
             "urdu_meaning": translation,
+
             "context": get_dua_field(
                 dua,
                 "context",
                 "story",
                 "description"
             ),
-            "quranenc": {
-                "source": "QuranEnc.com",
-                "translation_key": QURANENC_TRANSLATION_KEY,
-                "version": quranenc_version
+
+            "source": {
+                "name": "QuranEnc.com",
+                "translation_key": translation_key,
+                "translation_version": translation_version
             },
+
             "video": {
                 "width": WIDTH,
                 "height": HEIGHT,
@@ -2017,18 +2980,14 @@ def main():
             }
         }
 
-        json_path = (
-            batch_dir /
-            f"dua_{index:02d}.json"
+        metadata_path = (
+            batch_dir
+            / f"dua_{index:02d}.json"
         )
 
         save_json(
-            json_path,
+            metadata_path,
             metadata
-        )
-
-        created_videos.append(
-            video_path
         )
 
         # ----------------------------------------------------
@@ -2045,37 +3004,20 @@ def main():
                 identifier
             )
 
-        print(
-            f"Finished video {index}: "
-            f"{video_name}"
-        )
-
-    # ========================================================
-    # SAVE USED LIST
-    # ========================================================
+    # --------------------------------------------------------
+    # Save used list only after ALL 3 succeed
+    # --------------------------------------------------------
 
     save_json(
         USED_FILE,
         new_used
     )
 
-    # ========================================================
-    # BATCH README
-    # ========================================================
+    # --------------------------------------------------------
+    # README
+    # --------------------------------------------------------
 
-    readme_path = (
-        batch_dir /
-        "README.txt"
-    )
-
-    with open(
-        readme_path,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        f.write(
-            f"""ISLAMIC QURANIC DUA VIDEO BATCH
+    readme = f"""ISLAMIC QURANIC DUA VIDEO BATCH
 
 Created:
 {datetime.now().isoformat()}
@@ -2083,48 +3025,85 @@ Created:
 Videos:
 3
 
-Each video contains:
-- MP4 video
-- Social media TXT file
-- Metadata JSON file
+Resolution:
+1080 x 1920
 
-Social media TXT files contain:
-- YouTube title
-- YouTube description
-- YouTube hashtags
-- YouTube tags
-- TikTok caption
-- TikTok hashtags
+Duration:
+60 seconds
 
-Quran Translation:
+FPS:
+24
+
+Source:
 QuranEnc.com
 
 Urdu Translation:
 Muhammad Junagarhi
 
 Translation Key:
-{QURANENC_TRANSLATION_KEY}
+{translation_key}
 
 Translation Version:
-{quranenc_version}
+{translation_version}
 
-Video:
-1080x1920
-60 seconds
-24 FPS
+Each video includes:
+- MP4 video
+- YouTube title
+- YouTube description
+- YouTube hashtags
+- YouTube tags
+- TikTok caption
+- TikTok hashtags
+- JSON metadata
 
-The video itself does not display the source/version
-text at the bottom.
+The video itself does not display source/version
+information at the bottom.
 """
+
+    (batch_dir / "README.txt").write_text(
+        readme,
+        encoding="utf-8"
+    )
+
+    # --------------------------------------------------------
+    # Validate exactly 3 MP4
+    # --------------------------------------------------------
+
+    mp4_files = list(
+        batch_dir.glob("*.mp4")
+    )
+
+    if len(mp4_files) != 3:
+
+        raise RuntimeError(
+            f"Expected exactly 3 videos, "
+            f"found {len(mp4_files)}."
         )
 
-    # ========================================================
-    # CREATE ONE ZIP ONLY
-    # ========================================================
+    # --------------------------------------------------------
+    # Validate social files
+    # --------------------------------------------------------
+
+    social_files = list(
+        batch_dir.glob(
+            "*_social_media.txt"
+        )
+    )
+
+    if len(social_files) != 3:
+
+        raise RuntimeError(
+            f"Expected 3 social files, "
+            f"found {len(social_files)}."
+        )
+
+    # --------------------------------------------------------
+    # ONE ZIP
+    # --------------------------------------------------------
 
     zip_path = (
-        OUTPUT_DIR /
-        f"Islamic-Dua-3-Videos-{timestamp}.zip"
+        OUTPUT_DIR
+        / f"Islamic-Dua-3-Videos-{timestamp}.zip"
     )
 
     create_zip(
@@ -2132,62 +3111,22 @@ text at the bottom.
         zip_path
     )
 
-    # ========================================================
-    # VALIDATION
-    # ========================================================
+    # --------------------------------------------------------
+    # Final output
+    # --------------------------------------------------------
 
     print("")
     print("=" * 70)
-    print("FINAL VALIDATION")
+    print("FINAL OUTPUT")
     print("=" * 70)
 
-    mp4_files = list(
-        batch_dir.glob("*.mp4")
-    )
-
-    txt_files = list(
-        batch_dir.glob("*.txt")
-    )
-
-    json_files = list(
-        batch_dir.glob("*.json")
-    )
-
-    print(
-        f"MP4 files:  {len(mp4_files)}"
-    )
-
-    print(
-        f"TXT files:  {len(txt_files)}"
-    )
-
-    print(
-        f"JSON files: {len(json_files)}"
-    )
-
-    if len(mp4_files) != 3:
-
-        raise RuntimeError(
-            "ERROR: Expected exactly 3 videos."
-        )
-
-    if len(txt_files) < 4:
-
-        raise RuntimeError(
-            "ERROR: Social TXT files were not created correctly."
-        )
-
-    if not zip_path.exists():
-
-        raise RuntimeError(
-            "ERROR: ZIP was not created."
-        )
-
     print("")
-    print("OUTPUT FILES:")
+    print(
+        "Videos:"
+    )
 
     for file in sorted(
-        batch_dir.iterdir()
+        mp4_files
     ):
 
         print(
@@ -2196,14 +3135,55 @@ text at the bottom.
 
     print("")
     print(
-        f"FINAL ZIP: {zip_path}"
+        "Social files:"
+    )
+
+    for file in sorted(
+        social_files
+    ):
+
+        print(
+            f"  {file.name}"
+        )
+
+    print("")
+    print(
+        f"ONE ZIP:"
+    )
+
+    print(
+        f"  {zip_path}"
     )
 
     print("")
     print("=" * 70)
-    print("SUCCESS - 3 UNIQUE VIDEOS CREATED")
+    print("SUCCESS")
+    print("3 UNIQUE VIDEOS CREATED")
+    print("1 ZIP CREATED")
     print("=" * 70)
 
 
 if __name__ == "__main__":
-    main()
+
+    try:
+
+        main()
+
+    except Exception as e:
+
+        print("")
+        print("=" * 70)
+        print("BUILD FAILED")
+        print("=" * 70)
+
+        print(
+            str(e)
+        )
+
+        print("")
+        print(
+            "The workflow stopped before "
+            "creating/uploading incomplete videos."
+        )
+
+        raise
