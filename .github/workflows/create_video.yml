@@ -27,17 +27,17 @@ jobs:
 
     steps:
 
-      # ============================================
-      # 1. CHECKOUT
-      # ============================================
+      # =====================================================
+      # CHECKOUT
+      # =====================================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ============================================
-      # 2. PYTHON
-      # ============================================
+      # =====================================================
+      # PYTHON
+      # =====================================================
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,9 +45,9 @@ jobs:
           python-version: "3.11"
 
 
-      # ============================================
-      # 3. INSTALL FFMPEG
-      # ============================================
+      # =====================================================
+      # INSTALL FFMPEG
+      # =====================================================
 
       - name: Install FFmpeg
         run: |
@@ -56,9 +56,35 @@ jobs:
           ffmpeg -version
 
 
-      # ============================================
-      # 4. INSTALL PYTHON PACKAGES
-      # ============================================
+      # =====================================================
+      # INSTALL ARABIC / URDU FONT
+      # =====================================================
+
+      - name: Install Arabic Urdu Font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-core fontconfig
+
+          echo "Checking Noto Naskh Arabic..."
+
+          fc-match "Noto Naskh Arabic"
+
+          FONT_PATH="/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
+
+          if [ ! -f "$FONT_PATH" ]; then
+            echo "ERROR: Noto Naskh Arabic font not found."
+            echo "Available Noto fonts:"
+            find /usr/share/fonts -iname "*Naskh*" -o -iname "*Arabic*" | head -50
+            exit 1
+          fi
+
+          echo "Arabic/Urdu font found:"
+          ls -lh "$FONT_PATH"
+
+
+      # =====================================================
+      # INSTALL PYTHON PACKAGES
+      # =====================================================
 
       - name: Install Python packages
         run: |
@@ -66,92 +92,125 @@ jobs:
           pip install -r requirements.txt
 
 
-      # ============================================
-      # 5. CHECK REQUIRED FILES
-      # ============================================
+      # =====================================================
+      # CHECK PROJECT FILES
+      # =====================================================
 
       - name: Check project files
         run: |
 
-          echo "Checking project..."
+          echo "========================================"
+          echo "Checking project files"
+          echo "========================================"
 
           test -f create_video.py
           test -f requirements.txt
           test -f data/duas.json
-          test -f fonts/NotoNastaliqUrdu-Regular.ttf
           test -f audio/islamic_background.mp3
 
-          echo "All required files found."
+          echo "All required project files found."
+
+          echo ""
+          echo "Dua database:"
+          cat data/duas.json | head -20
+
+          echo ""
+          echo "FFmpeg:"
+          which ffmpeg
+
+          echo ""
+          echo "Python:"
+          python --version
 
 
-      # ============================================
-      # 6. CREATE DIRECTORIES
-      # ============================================
+      # =====================================================
+      # PREPARE FOLDERS
+      # =====================================================
 
       - name: Prepare folders
         run: |
+          rm -rf output
+          rm -rf work
+
           mkdir -p output
           mkdir -p work
 
 
-      # ============================================
-      # 7. CREATE VIDEO
-      # ============================================
+      # =====================================================
+      # CREATE VIDEO
+      # =====================================================
 
       - name: Create Dua video
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-
         run: |
           python create_video.py
 
 
-      # ============================================
-      # 8. CHECK OUTPUT
-      # ============================================
+      # =====================================================
+      # CHECK GENERATED FILES
+      # =====================================================
 
       - name: Check generated files
         run: |
 
-          echo "Generated files:"
+          echo "========================================"
+          echo "Generated files"
+          echo "========================================"
 
           ls -lah output/
 
-          test -n "$(find output -name '*.mp4' -print -quit)"
+          VIDEO_FILE=$(find output -type f -name "*.mp4" -print -quit)
 
-          echo "Video successfully generated."
+          if [ -z "$VIDEO_FILE" ]; then
+            echo "ERROR: No MP4 video was generated."
+            exit 1
+          fi
+
+          echo ""
+          echo "Video successfully generated:"
+          echo "$VIDEO_FILE"
+
+          echo ""
+          echo "Checking video information..."
+
+          ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -show_entries stream=width,height \
+            -of default=noprint_wrappers=1 \
+            "$VIDEO_FILE"
 
 
-      # ============================================
-      # 9. UPLOAD VIDEO
-      # ============================================
+      # =====================================================
+      # UPLOAD VIDEO
+      # =====================================================
 
       - name: Upload generated video
         uses: actions/upload-artifact@v4
-
         with:
           name: Islamic-Dua-Video-${{ github.run_number }}
-
           path: |
             output/*.mp4
             output/*.json
-
           if-no-files-found: error
 
 
-      # ============================================
-      # 10. UPDATE USED DUA
-      # ============================================
+      # =====================================================
+      # SAVE USED DUA LIST
+      # =====================================================
 
       - name: Commit used Dua list
         run: |
 
           git config user.name "github-actions[bot]"
 
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add used_duas.json
 
-          git diff --cached --quiet || git commit -m "Update used Dua list"
+          git diff --cached --quiet || \
+            git commit -m "Update used Dua list"
 
           git push
