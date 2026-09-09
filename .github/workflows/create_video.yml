@@ -1,55 +1,65 @@
-name: Create Islamic Dua Video
+name: Create 3 Islamic Dua Videos
 
 on:
 
+  # Manual test
   workflow_dispatch:
+
+  # ========================================================
+  # ONE RUN PER DAY
+  #
+  # 09:00 UAE = 05:00 UTC
+  #
+  # This single run creates ALL 3 videos.
+  # ========================================================
 
   schedule:
 
-    # 09:00 UAE = 05:00 UTC
     - cron: "0 5 * * *"
-
-    # 13:00 UAE = 09:00 UTC
-    - cron: "0 9 * * *"
-
-    # 20:00 UAE = 16:00 UTC
-    - cron: "0 16 * * *"
 
 
 jobs:
 
-  create-video:
+  create-videos:
 
     runs-on: ubuntu-latest
 
     permissions:
+
       contents: write
+
 
     steps:
 
-      # =====================================================
+
+      # ====================================================
       # CHECKOUT
-      # =====================================================
+      # ====================================================
 
       - name: Checkout repository
+
         uses: actions/checkout@v4
 
 
-      # =====================================================
+      # ====================================================
       # PYTHON
-      # =====================================================
+      # ====================================================
 
       - name: Set up Python
+
         uses: actions/setup-python@v5
+
         with:
+
           python-version: "3.11"
 
 
-      # =====================================================
-      # SYSTEM PACKAGES
-      # =====================================================
+      # ====================================================
+      # FFmpeg + ARABIC/URDU SUPPORT
+      # ====================================================
 
-      - name: Install FFmpeg and RTL support
+      - name: Install FFmpeg and Arabic Urdu fonts
+
         run: |
 
           sudo apt-get update
@@ -58,12 +68,15 @@ jobs:
             ffmpeg \
             fontconfig \
             fonts-noto-core \
+            fonts-noto-extra \
             libfribidi0 \
             libharfbuzz0b \
-            libthai0 \
             libpango-1.0-0 \
             libpangocairo-1.0-0 \
             libpangoft2-1.0-0
+
+
+          fc-cache -f -v
 
 
           echo ""
@@ -76,37 +89,32 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "Arabic/Urdu Font"
+          echo "Arabic / Urdu Fonts"
           echo "========================================"
+
+          fc-list | grep -Ei \
+            "Noto.*Arabic|Noto.*Urdu|Nastaliq" \
+            | head -50
+
+
+          echo ""
+          echo "Noto Naskh Arabic:"
 
           fc-match "Noto Naskh Arabic"
 
 
-          FONT_PATH="/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
+          echo ""
+          echo "Noto Sans Arabic:"
 
-          if [ ! -f "$FONT_PATH" ]; then
-
-            echo "ERROR: Noto Naskh Arabic font not found."
-
-            find /usr/share/fonts \
-              -iname "*Naskh*" \
-              -o -iname "*Arabic*" \
-              | head -50
-
-            exit 1
-
-          fi
+          fc-match "Noto Sans Arabic"
 
 
-          echo "Font found:"
-          ls -lh "$FONT_PATH"
-
-
-      # =====================================================
+      # ====================================================
       # PYTHON PACKAGES
-      # =====================================================
+      # ====================================================
 
       - name: Install Python packages
+
         run: |
 
           python -m pip install --upgrade pip
@@ -114,96 +122,135 @@ jobs:
           pip install -r requirements.txt
 
 
-      # =====================================================
-      # CHECK PILLOW RTL SUPPORT
-      # =====================================================
+      # ====================================================
+      # CHECK PILLOW
+      # ====================================================
 
       - name: Check Pillow RTL support
+
         run: |
 
           python - <<'PY'
 
           from PIL import Image, features
 
-          print("Pillow version:", Image.__version__)
+          print(
+              "Pillow version:",
+              Image.__version__
+          )
 
-          print("RAQM support:",
-                features.check("raqm"))
+          print(
+              "RAQM support:",
+              features.check("raqm")
+          )
 
           if not features.check("raqm"):
+
               raise SystemExit(
-                  "ERROR: Pillow RAQM/RTL support is not available."
+                  "ERROR: Pillow RAQM support "
+                  "is unavailable."
               )
 
-          print("RTL shaping support is available.")
+          print(
+              "Arabic/Urdu RTL support: OK"
+          )
 
           PY
 
 
-      # =====================================================
+      # ====================================================
       # CHECK PROJECT
-      # =====================================================
+      # ====================================================
 
       - name: Check project files
+
         run: |
 
+          echo "Checking required files..."
+
           test -f create_video.py
+
           test -f requirements.txt
+
           test -f data/duas.json
+
           test -f audio/islamic_background.mp3
 
-          echo "All required project files found."
+          test -f used_duas.json || \
+            echo "[]" > used_duas.json
 
 
-      # =====================================================
-      # PREPARE
-      # =====================================================
+          echo ""
+
+          echo "Required project files found."
+
+
+      # ====================================================
+      # PREPARE OUTPUT
+      # ====================================================
 
       - name: Prepare folders
+
         run: |
 
           rm -rf output
+
           rm -rf work
 
           mkdir -p output
+
           mkdir -p work
 
 
-      # =====================================================
-      # CREATE VIDEO
-      # =====================================================
+      # ====================================================
+      # CREATE 3 VIDEOS
+      # ====================================================
 
-      - name: Create Dua video
+      - name: Create 3 Dua videos
+
         env:
+
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+
         run: |
 
           python create_video.py
 
 
-      # =====================================================
-      # CHECK VIDEO
-      # =====================================================
+      # ====================================================
+      # CHECK 3 VIDEOS
+      # ====================================================
 
-      - name: Check generated files
+      - name: Check generated videos
+
         run: |
 
+          echo ""
           echo "========================================"
-          echo "Generated files"
+          echo "GENERATED VIDEOS"
           echo "========================================"
 
           ls -lah output/
 
 
-          VIDEO_FILE=$(find output \
+          COUNT=$(find output \
+            -maxdepth 1 \
             -type f \
             -name "*.mp4" \
-            -print -quit)
+            | wc -l)
 
 
-          if [ -z "$VIDEO_FILE" ]; then
+          echo ""
 
-            echo "ERROR: No MP4 video generated."
+          echo "MP4 count:"
+          echo "$COUNT"
+
+
+          if [ "$COUNT" -ne 3 ]; then
+
+            echo ""
+            echo "ERROR:"
+            echo "Expected exactly 3 MP4 videos."
 
             exit 1
 
@@ -211,29 +258,113 @@ jobs:
 
 
           echo ""
-          echo "Video:"
-          echo "$VIDEO_FILE"
+
+          echo "All 3 videos generated."
+
+
+      # ====================================================
+      # VIDEO INFORMATION
+      # ====================================================
+
+      - name: Check video properties
+
+        run: |
+
+          echo ""
+          echo "========================================"
+          echo "VIDEO INFORMATION"
+          echo "========================================"
+
+
+          for VIDEO in output/*.mp4
+
+          do
+
+            echo ""
+
+            echo "----------------------------------------"
+
+            echo "$VIDEO"
+
+            echo "----------------------------------------"
+
+
+            ffprobe \
+              -v error \
+              -show_entries \
+              format=duration \
+              -show_entries \
+              stream=width,height \
+              -of default=noprint_wrappers=1 \
+              "$VIDEO"
+
+          done
+
+
+      # ====================================================
+      # CREATE ONE ZIP FILE
+      # ====================================================
+
+      - name: Create 3 video ZIP
+
+        run: |
+
+          echo ""
+          echo "========================================"
+          echo "CREATING DOWNLOAD ZIP"
+          echo "========================================"
+
+
+          cd output
+
+
+          zip \
+            -9 \
+            ../Islamic-Dua-3-Videos-${{ github.run_number }}.zip \
+            *.mp4 \
+            *.json
+
+
+          cd ..
 
 
           echo ""
-          echo "Video information:"
 
-          ffprobe \
-            -v error \
-            -show_entries format=duration \
-            -show_entries stream=width,height \
-            -of default=noprint_wrappers=1 \
-            "$VIDEO_FILE"
+          echo "ZIP created:"
+
+          ls -lh \
+            Islamic-Dua-3-Videos-${{ github.run_number }}.zip
 
 
-      # =====================================================
-      # UPLOAD
-      # =====================================================
+      # ====================================================
+      # UPLOAD ONE ZIP
+      # ====================================================
 
-      - name: Upload generated video
+      - name: Upload 3 videos ZIP
+
         uses: actions/upload-artifact@v4
+
         with:
-          name: Islamic-Dua-Video-${{ github.run_number }}
+
+          name: Islamic-Dua-3-Videos-${{ github.run_number }}
+
+          path: |
+            Islamic-Dua-3-Videos-${{ github.run_number }}.zip
+
+          if-no-files-found: error
+
+
+      # ====================================================
+      # ALSO UPLOAD INDIVIDUAL FILES
+      # ====================================================
+
+      - name: Upload individual videos
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: Islamic-Dua-Individual-Videos-${{ github.run_number }}
 
           path: |
             output/*.mp4
@@ -242,21 +373,28 @@ jobs:
           if-no-files-found: error
 
 
-      # =====================================================
-      # SAVE USED DUA
-      # =====================================================
+      # ====================================================
+      # SAVE USED DUA LIST
+      # ====================================================
 
       - name: Commit used Dua list
+
         run: |
 
-          git config user.name "github-actions[bot]"
+          git config user.name \
+            "github-actions[bot]"
+
 
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
+
           git add used_duas.json
 
+
           git diff --cached --quiet || \
-            git commit -m "Update used Dua list"
+            git commit \
+            -m "Update used Dua list"
+
 
           git push
