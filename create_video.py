@@ -1891,17 +1891,50 @@ def create_poster(
     )
 
     # --------------------------------------------------------
-    # TITLE REMOVED
+    # DUA TITLE
     # --------------------------------------------------------
-    # The "دعا برائے ..." title line and its divider are intentionally
-    # not displayed on the video. The title is still retained for
-    # YouTube/TikTok metadata.
+    # Show the dua topic at the top of the video.
+    # The old horizontal line crossing/under the title is intentionally removed.
+
+    title_font = load_font(
+        TITLE_FONT,
+        52
+    )
+
+    display_title = title.strip()
+    if not display_title.startswith("دعا برائے"):
+        display_title = f"دعا برائے {display_title}"
+
+    title_lines = wrap_text(
+        draw,
+        display_title,
+        title_font,
+        830,
+        "rtl",
+        "ur"
+    )
+
+    title_y = CARD_Y1 + 42
+    title_bottom = draw_centered_lines(
+        draw,
+        title_lines,
+        title_font,
+        WIDTH // 2,
+        title_y,
+        68,
+        GOLD,
+        "rtl",
+        "ur",
+        gap=2
+    )
+
+    # No divider line is drawn here.
 
     # --------------------------------------------------------
     # ARABIC TEXT
     # --------------------------------------------------------
 
-    arabic_top = CARD_Y1 + 55
+    arabic_top = max(245, title_bottom + 35)
     arabic_bottom = arabic_top + 355
 
     # Arabic middle box removed intentionally.
