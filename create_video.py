@@ -19,7 +19,7 @@ from PIL import (
 
 
 # ============================================================
-# PROJECT PATHS
+# PROJECT
 # ============================================================
 
 ROOT = Path(__file__).resolve().parent
@@ -53,7 +53,7 @@ VIDEO_SECONDS = 60
 
 
 # ============================================================
-# API SETTINGS
+# API
 # ============================================================
 
 PEXELS_API_KEY = os.getenv(
@@ -77,7 +77,7 @@ QURANENC_SURA_URL = (
 )
 
 
-TRANSLATION_KEY = (
+DEFAULT_TRANSLATION_KEY = (
     "urdu_junagarhi"
 )
 
@@ -92,13 +92,11 @@ DARK = (
     35
 )
 
-
 GOLD = (
     154,
     116,
     45
 )
-
 
 SOFT_GOLD = (
     190,
@@ -116,7 +114,6 @@ OUTPUT_DIR.mkdir(
     exist_ok=True
 )
 
-
 WORK_DIR.mkdir(
     parents=True,
     exist_ok=True
@@ -124,48 +121,56 @@ WORK_DIR.mkdir(
 
 
 # ============================================================
-# FONT
+# FONT DISCOVERY
 # ============================================================
 
 def find_font():
 
-    fonts = [
+    candidates = [
 
-        Path(
-            "/usr/share/fonts/truetype/noto/"
+        # Best choice for Arabic + Urdu
+        "/usr/share/fonts/truetype/noto/"
+        "NotoNaskhArabic-Regular.ttf",
+
+        # Alternative Ubuntu location
+        "/usr/share/fonts/opentype/noto/"
+        "NotoNaskhArabic-Regular.ttf",
+
+        # Project font if available
+        str(
+            ROOT /
+            "fonts" /
             "NotoNaskhArabic-Regular.ttf"
         ),
 
-        Path(
-            "/usr/share/fonts/opentype/noto/"
-            "NotoNaskhArabic-Regular.ttf"
+        # Existing project font
+        str(
+            ROOT /
+            "fonts" /
+            "NotoNastaliqUrdu-Regular.ttf"
         ),
 
-        ROOT /
-        "fonts" /
-        "NotoNaskhArabic-Regular.ttf"
+        # System fallback
+        "/usr/share/fonts/truetype/noto/"
+        "NotoSansArabic-Regular.ttf",
+
+        "/usr/share/fonts/opentype/noto/"
+        "NotoSansArabic-Regular.ttf"
 
     ]
 
 
-    for font in fonts:
+    for candidate in candidates:
 
-        if font.exists():
+        path = Path(candidate)
 
-            print(
-                "Using Arabic/Urdu font:"
-            )
+        if path.exists():
 
-            print(
-                font
-            )
-
-            return font
+            return path
 
 
     raise RuntimeError(
-        "Noto Naskh Arabic font "
-        "was not found."
+        "No suitable Arabic/Urdu font found."
     )
 
 
@@ -173,19 +178,32 @@ FONT_FILE = find_font()
 
 
 # ============================================================
-# VERIFY RTL ENGINE
+# RAQM CHECK
 # ============================================================
 
 if not features.check("raqm"):
 
     raise RuntimeError(
-        "Pillow RAQM support is missing. "
-        "Arabic/Urdu RTL rendering cannot continue."
+        "Pillow RAQM support is unavailable. "
+        "Arabic/Urdu rendering cannot continue."
     )
 
 
 print(
-    "Pillow RAQM RTL support: OK"
+    "========================================"
+)
+
+print(
+    "Font:",
+    FONT_FILE
+)
+
+print(
+    "Pillow RAQM: OK"
+)
+
+print(
+    "========================================"
 )
 
 
@@ -201,16 +219,29 @@ def clean_text(text):
 
     text = str(text)
 
+    # Remove BOM
     text = text.replace(
         "\ufeff",
         ""
     )
 
+    # Remove zero-width characters
     text = text.replace(
         "\u200b",
         ""
     )
 
+    text = text.replace(
+        "\u200c",
+        ""
+    )
+
+    text = text.replace(
+        "\u200d",
+        ""
+    )
+
+    # Normalize line breaks
     text = text.replace(
         "\r",
         " "
@@ -221,12 +252,14 @@ def clean_text(text):
         " "
     )
 
+    # Remove HTML tags only
     text = re.sub(
         r"<[^>]+>",
         " ",
         text
     )
 
+    # Normalize spaces
     text = re.sub(
         r"\s+",
         " ",
@@ -249,7 +282,7 @@ def get_font(size):
 
 
 # ============================================================
-# RTL TEXT WIDTH
+# RTL WIDTH
 # ============================================================
 
 def rtl_width(
@@ -267,6 +300,7 @@ def rtl_width(
 
         return 0
 
+
     box = draw.textbbox(
         (0, 0),
         text,
@@ -275,6 +309,7 @@ def rtl_width(
         language=language
     )
 
+
     return (
         box[2] -
         box[0]
@@ -282,12 +317,7 @@ def rtl_width(
 
 
 # ============================================================
-# RTL WRAPPING
-#
-# IMPORTANT:
-# We keep the ORIGINAL logical text.
-# Pillow + RAQM handles Arabic/Urdu shaping
-# and right-to-left display.
+# RTL WRAP
 # ============================================================
 
 def wrap_rtl_text(
@@ -320,7 +350,8 @@ def wrap_rtl_text(
             word
             if not current
             else
-            current + " " + word
+            current + " " +
+            word
         )
 
 
@@ -358,7 +389,7 @@ def wrap_rtl_text(
 
 
 # ============================================================
-# FIT RTL TEXT
+# FIT TEXT
 # ============================================================
 
 def fit_rtl_text(
@@ -417,10 +448,11 @@ def fit_rtl_text(
 # ============================================================
 # DRAW RTL
 #
-# DO NOT REVERSE TEXT.
-# DO NOT USE PYTHON-BIDI.
-# DO NOT USE ARABIC-RESHAPER.
-# Pillow RAQM handles it.
+# IMPORTANT:
+# No reversing.
+# No arabic_reshaper.
+# No python-bidi.
+# Pillow RAQM handles shaping.
 # ============================================================
 
 def draw_rtl(
@@ -455,7 +487,7 @@ def draw_rtl(
 
 
 # ============================================================
-# LOAD USED
+# LOAD USED DUAS
 # ============================================================
 
 def load_used():
@@ -491,7 +523,7 @@ def load_used():
 
 
 # ============================================================
-# SAVE USED
+# SAVE USED DUAS
 # ============================================================
 
 def save_used(used):
@@ -507,7 +539,7 @@ def save_used(used):
 
 
 # ============================================================
-# LOAD DUAS
+# LOAD DUA DATABASE
 # ============================================================
 
 def load_duas():
@@ -515,7 +547,8 @@ def load_duas():
     if not DATA_FILE.exists():
 
         raise RuntimeError(
-            f"Missing:\n{DATA_FILE}"
+            f"Missing Dua database:\n"
+            f"{DATA_FILE}"
         )
 
 
@@ -530,7 +563,8 @@ def load_duas():
     except Exception as error:
 
         raise RuntimeError(
-            f"Invalid duas.json:\n{error}"
+            "Invalid duas.json:\n"
+            f"{error}"
         )
 
 
@@ -556,7 +590,7 @@ def load_duas():
 
 
 # ============================================================
-# HTTP GET
+# HTTP
 # ============================================================
 
 def http_get(
@@ -581,7 +615,7 @@ def http_get(
 
 
 # ============================================================
-# QURANENC TRANSLATION
+# QURANENC SINGLE AYAH
 # ============================================================
 
 def fetch_single_translation(
@@ -599,7 +633,8 @@ def fetch_single_translation(
 
 
     print(
-        f"QuranEnc: {sura}:{ayah}"
+        f"QuranEnc translation: "
+        f"{sura}:{ayah}"
     )
 
 
@@ -635,7 +670,7 @@ def fetch_single_translation(
     except Exception as error:
 
         print(
-            "Ayah endpoint error:"
+            "Ayah endpoint failed:"
         )
 
         print(
@@ -644,7 +679,7 @@ def fetch_single_translation(
 
 
     # ========================================================
-    # SURAH FALLBACK
+    # FALLBACK TO SURAH ENDPOINT
     # ========================================================
 
     print(
@@ -745,7 +780,7 @@ def fetch_single_translation(
     except Exception as error:
 
         print(
-            "Surah endpoint error:"
+            "Surah fallback failed:"
         )
 
         print(
@@ -754,13 +789,13 @@ def fetch_single_translation(
 
 
     raise RuntimeError(
-        f"No QuranEnc translation "
+        "No QuranEnc translation "
         f"returned for {sura}:{ayah}"
     )
 
 
 # ============================================================
-# COMPLETE QURAN TRANSLATION
+# COMPLETE TRANSLATION
 # ============================================================
 
 def fetch_quran_translation(
@@ -769,7 +804,7 @@ def fetch_quran_translation(
 
     translation_key = dua.get(
         "translation_key",
-        TRANSLATION_KEY
+        DEFAULT_TRANSLATION_KEY
     )
 
 
@@ -823,7 +858,8 @@ def fetch_quran_translation(
     if not result:
 
         raise RuntimeError(
-            "Empty QuranEnc translation."
+            "QuranEnc returned "
+            "an empty translation."
         )
 
 
@@ -831,10 +867,12 @@ def fetch_quran_translation(
 
 
 # ============================================================
-# PEXELS BACKGROUND
+# PEXELS
 # ============================================================
 
-def download_background():
+def download_background(
+    number
+):
 
     if not PEXELS_API_KEY:
 
@@ -880,7 +918,8 @@ def download_background():
     for query in queries:
 
         print(
-            f"Pexels search: {query}"
+            f"Background {number}: "
+            f"{query}"
         )
 
 
@@ -890,6 +929,7 @@ def download_background():
                 PEXELS_URL,
                 headers=headers,
                 params={
+
                     "query":
                         query,
 
@@ -901,6 +941,7 @@ def download_background():
 
                     "per_page":
                         15
+
                 },
                 timeout=60
             )
@@ -934,11 +975,23 @@ def download_background():
 
 
                 image_url = (
-                    src.get("portrait")
+
+                    src.get(
+                        "portrait"
+                    )
+
                     or
-                    src.get("large2x")
+
+                    src.get(
+                        "large2x"
+                    )
+
                     or
-                    src.get("large")
+
+                    src.get(
+                        "large"
+                    )
+
                 )
 
 
@@ -949,7 +1002,7 @@ def download_background():
 
                 path = (
                     WORK_DIR /
-                    "background.jpg"
+                    f"background_{number}.jpg"
                 )
 
 
@@ -969,12 +1022,12 @@ def download_background():
                     )
 
 
-                    test = Image.open(
+                    test_image = Image.open(
                         path
                     )
 
 
-                    test.verify()
+                    test_image.verify()
 
 
                     return path
@@ -999,8 +1052,8 @@ def download_background():
 
 
     raise RuntimeError(
-        "Could not download "
-        "Pexels background."
+        f"Could not download "
+        f"background {number}."
     )
 
 
@@ -1009,7 +1062,8 @@ def download_background():
 # ============================================================
 
 def prepare_background(
-    image_path
+    image_path,
+    number
 ):
 
     image = Image.open(
@@ -1111,7 +1165,7 @@ def prepare_background(
 
     output = (
         WORK_DIR /
-        "background_prepared.jpg"
+        f"background_prepared_{number}.jpg"
     )
 
 
@@ -1132,7 +1186,8 @@ def prepare_background(
 
 def create_poster(
     dua,
-    urdu_translation
+    urdu_translation,
+    number
 ):
 
     image = Image.new(
@@ -1239,7 +1294,7 @@ def create_poster(
 
 
     # ========================================================
-    # LINE
+    # TITLE LINE
     # ========================================================
 
     draw.line(
@@ -1312,13 +1367,13 @@ def create_poster(
     # URDU MEANING TITLE
     # ========================================================
 
-    meaning_title_font = get_font(
-        34
+    meaning_title_y = (
+        arabic_y + 20
     )
 
 
-    meaning_title_y = (
-        arabic_y + 20
+    meaning_title_font = get_font(
+        34
     )
 
 
@@ -1336,7 +1391,7 @@ def create_poster(
 
 
     # ========================================================
-    # URDU MEANING
+    # URDU TRANSLATION
     # ========================================================
 
     meaning_y = (
@@ -1520,40 +1575,19 @@ def create_poster(
 
 
     # ========================================================
-    # SOURCE
+    # IMPORTANT:
+    #
+    # NO SOURCE TEXT AT THE BOTTOM.
+    # NO VERSION TEXT.
+    # NO EXTRA TEXT.
+    #
+    # The video ends after the context section.
     # ========================================================
 
-    source_font = get_font(
-        17
-    )
-
-
-    source_text = (
-        "ماخذ: QuranEnc.com | "
-        "اردو ترجمہ: محمد جوناگڑھی"
-    )
-
-
-    draw_rtl(
-        draw,
-        (
-            center,
-            HEIGHT - 105
-        ),
-        source_text,
-        source_font,
-        SOFT_GOLD,
-        "ur"
-    )
-
-
-    # ========================================================
-    # SAVE POSTER
-    # ========================================================
 
     poster = (
         WORK_DIR /
-        "poster.png"
+        f"poster_{number}.png"
     )
 
 
@@ -1563,11 +1597,7 @@ def create_poster(
 
 
     print(
-        "Poster created:"
-    )
-
-    print(
-        poster
+        f"Poster {number} created."
     )
 
 
@@ -1587,8 +1617,7 @@ def create_video(
     if not AUDIO_FILE.exists():
 
         raise RuntimeError(
-            "Islamic background audio "
-            "is missing."
+            "Background audio is missing."
         )
 
 
@@ -1598,26 +1627,39 @@ def create_video(
 
         "-y",
 
-        # Background
+        # ----------------------------------------------------
+        # BACKGROUND
+        # ----------------------------------------------------
+
         "-loop",
         "1",
 
         "-i",
         str(background),
 
-        # Poster
+        # ----------------------------------------------------
+        # POSTER
+        # ----------------------------------------------------
+
         "-loop",
         "1",
 
         "-i",
         str(poster),
 
-        # Audio
+        # ----------------------------------------------------
+        # AUDIO
+        # ----------------------------------------------------
+
         "-stream_loop",
         "-1",
 
         "-i",
         str(AUDIO_FILE),
+
+        # ----------------------------------------------------
+        # VIDEO FILTER
+        # ----------------------------------------------------
 
         "-filter_complex",
 
@@ -1638,17 +1680,29 @@ def create_video(
             "[v]"
         ),
 
+        # ----------------------------------------------------
+        # MAP
+        # ----------------------------------------------------
+
         "-map",
         "[v]",
 
         "-map",
         "2:a",
 
+        # ----------------------------------------------------
+        # LENGTH
+        # ----------------------------------------------------
+
         "-t",
         str(VIDEO_SECONDS),
 
         "-r",
         str(FPS),
+
+        # ----------------------------------------------------
+        # VIDEO
+        # ----------------------------------------------------
 
         "-c:v",
         "libx264",
@@ -1659,11 +1713,19 @@ def create_video(
         "-crf",
         "20",
 
+        # ----------------------------------------------------
+        # AUDIO
+        # ----------------------------------------------------
+
         "-c:a",
         "aac",
 
         "-b:a",
         "128k",
+
+        # ----------------------------------------------------
+        # COMPATIBILITY
+        # ----------------------------------------------------
 
         "-pix_fmt",
         "yuv420p",
@@ -1675,8 +1737,13 @@ def create_video(
     ]
 
 
+    print()
     print(
-        "Running FFmpeg..."
+        "Running FFmpeg:"
+    )
+
+    print(
+        output_file.name
     )
 
 
@@ -1687,10 +1754,10 @@ def create_video(
 
 
 # ============================================================
-# SELECT DUA
+# SELECT 3 DIFFERENT DUAS
 # ============================================================
 
-def select_dua():
+def select_three_duas():
 
     duas = load_duas()
 
@@ -1700,6 +1767,8 @@ def select_dua():
 
 
     required = [
+
+        "id",
 
         "title",
 
@@ -1729,21 +1798,6 @@ def select_dua():
             continue
 
 
-        dua_id = dua.get(
-            "id"
-        )
-
-
-        if not dua_id:
-
-            continue
-
-
-        if dua_id in used:
-
-            continue
-
-
         valid = True
 
 
@@ -1758,29 +1812,42 @@ def select_dua():
                 break
 
 
-        if valid:
+        if not valid:
 
-            available.append(
-                dua
-            )
+            continue
 
 
-    if not available:
+        if dua["id"] in used:
 
-        print(
-            "All Duas used."
+            continue
+
+
+        available.append(
+            dua
         )
 
 
+    # ========================================================
+    # If fewer than 3 remain, start a new cycle.
+    # ========================================================
+
+    if len(available) < 3:
+
+        print()
         print(
-            "Starting new cycle."
+            "Not enough unused Duas "
+            "for today's 3 videos."
         )
 
+        print(
+            "Starting a new Dua cycle."
+        )
 
         save_used(
             []
         )
 
+        used = set()
 
         available = [
 
@@ -1788,23 +1855,34 @@ def select_dua():
 
             for dua in duas
 
-            if isinstance(
-                dua,
-                dict
+            if (
+                isinstance(
+                    dua,
+                    dict
+                )
+                and
+                all(
+                    dua.get(
+                        field
+                    )
+                    for field in required
+                )
             )
 
         ]
 
 
-    if not available:
+    if len(available) < 3:
 
         raise RuntimeError(
-            "No valid Duas available."
+            "duas.json must contain "
+            "at least 3 valid Duas."
         )
 
 
-    selected = random.choice(
-        available
+    selected = random.sample(
+        available,
+        3
     )
 
 
@@ -1814,27 +1892,25 @@ def select_dua():
     )
 
     print(
-        "SELECTED DUA"
+        "TODAY'S 3 DUAS"
     )
 
     print(
         "========================================"
     )
 
-    print(
-        "ID:",
-        selected["id"]
-    )
 
-    print(
-        "Title:",
-        selected["title"]
-    )
+    for index, dua in enumerate(
+        selected,
+        start=1
+    ):
 
-    print(
-        "Reference:",
-        selected["reference"]
-    )
+        print(
+            f"{index}. "
+            f"{dua['title']} "
+            f"({dua['reference']})"
+        )
+
 
     print(
         "========================================"
@@ -1898,7 +1974,7 @@ def save_metadata(
         "translation_key":
             dua.get(
                 "translation_key",
-                TRANSLATION_KEY
+                DEFAULT_TRANSLATION_KEY
             ),
 
         "video":
@@ -1935,7 +2011,7 @@ def main():
     )
 
     print(
-        "      ISLAMIC DUA VIDEO AUTOMATION"
+        "   ISLAMIC DUA - 3 VIDEO DAILY SYSTEM"
     )
 
     print(
@@ -1946,7 +2022,7 @@ def main():
 
 
     # ========================================================
-    # API CHECK
+    # CHECK API
     # ========================================================
 
     if not PEXELS_API_KEY:
@@ -1957,41 +2033,31 @@ def main():
 
 
     # ========================================================
-    # FONT CHECK
-    # ========================================================
-
-    print(
-        "Font:",
-        FONT_FILE
-    )
-
-
-    # ========================================================
-    # AUDIO CHECK
+    # CHECK AUDIO
     # ========================================================
 
     if not AUDIO_FILE.exists():
 
         raise SystemExit(
-            f"Audio missing:\n"
+            "ERROR: Background audio missing:\n"
             f"{AUDIO_FILE}"
         )
 
 
     # ========================================================
-    # DATA CHECK
+    # CHECK DATA
     # ========================================================
 
     if not DATA_FILE.exists():
 
         raise SystemExit(
-            f"Dua database missing:\n"
+            "ERROR: Dua database missing:\n"
             f"{DATA_FILE}"
         )
 
 
     # ========================================================
-    # CLEAN WORK
+    # CLEAN WORK DIRECTORY
     # ========================================================
 
     if WORK_DIR.exists():
@@ -2008,127 +2074,156 @@ def main():
 
 
     # ========================================================
-    # SELECT
+    # CLEAN OLD OUTPUT FILES
     # ========================================================
 
-    dua = select_dua()
+    for file in OUTPUT_DIR.glob(
+        "*"
+    ):
+
+        if file.is_file():
+
+            file.unlink()
 
 
     # ========================================================
-    # TRANSLATION
+    # SELECT 3
     # ========================================================
 
-    print()
-    print(
-        "Fetching exact QuranEnc Urdu translation..."
+    selected_duas = (
+        select_three_duas()
     )
 
 
-    urdu_translation = (
-        fetch_quran_translation(
-            dua
+    generated_files = []
+
+
+    # ========================================================
+    # CREATE 3 VIDEOS
+    # ========================================================
+
+    for number, dua in enumerate(
+        selected_duas,
+        start=1
+    ):
+
+        print()
+        print(
+            "============================================"
         )
-    )
 
-
-    print(
-        "Translation received."
-    )
-
-
-    # ========================================================
-    # BACKGROUND
-    # ========================================================
-
-    print()
-    print(
-        "Downloading Islamic background..."
-    )
-
-
-    background = (
-        download_background()
-    )
-
-
-    prepared_background = (
-        prepare_background(
-            background
+        print(
+            f"CREATING VIDEO {number} OF 3"
         )
-    )
+
+        print(
+            "============================================"
+        )
+
+
+        # ----------------------------------------------------
+        # Translation
+        # ----------------------------------------------------
+
+        print(
+            "Fetching exact QuranEnc translation..."
+        )
+
+
+        urdu_translation = (
+            fetch_quran_translation(
+                dua
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # Background
+        # ----------------------------------------------------
+
+        background = (
+            download_background(
+                number
+            )
+        )
+
+
+        prepared_background = (
+            prepare_background(
+                background,
+                number
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # Poster
+        # ----------------------------------------------------
+
+        poster = create_poster(
+            dua,
+            urdu_translation,
+            number
+        )
+
+
+        # ----------------------------------------------------
+        # Output
+        # ----------------------------------------------------
+
+        output_file = (
+            OUTPUT_DIR /
+            f"dua_{number}.mp4"
+        )
+
+
+        # ----------------------------------------------------
+        # Video
+        # ----------------------------------------------------
+
+        create_video(
+            prepared_background,
+            poster,
+            output_file
+        )
+
+
+        # ----------------------------------------------------
+        # Metadata
+        # ----------------------------------------------------
+
+        save_metadata(
+            dua,
+            urdu_translation,
+            output_file
+        )
+
+
+        generated_files.append(
+            output_file
+        )
+
+
+        print()
+        print(
+            f"VIDEO {number} COMPLETE"
+        )
 
 
     # ========================================================
-    # POSTER
-    # ========================================================
-
-    print()
-    print(
-        "Creating Arabic/Urdu poster..."
-    )
-
-
-    poster = create_poster(
-        dua,
-        urdu_translation
-    )
-
-
-    # ========================================================
-    # OUTPUT
-    # ========================================================
-
-    timestamp = int(
-        time.time()
-    )
-
-
-    output_file = (
-        OUTPUT_DIR /
-        f"dua_{timestamp}.mp4"
-    )
-
-
-    # ========================================================
-    # VIDEO
-    # ========================================================
-
-    print()
-    print(
-        "Creating video..."
-    )
-
-
-    create_video(
-        prepared_background,
-        poster,
-        output_file
-    )
-
-
-    # ========================================================
-    # METADATA
-    # ========================================================
-
-    save_metadata(
-        dua,
-        urdu_translation,
-        output_file
-    )
-
-
-    # ========================================================
-    # USED LIST
+    # UPDATE USED LIST
     # ========================================================
 
     used = load_used()
 
 
-    if dua["id"] not in used:
+    for dua in selected_duas:
 
-        used.append(
-            dua["id"]
-        )
+        if dua["id"] not in used:
+
+            used.append(
+                dua["id"]
+            )
 
 
     save_used(
@@ -2137,22 +2232,8 @@ def main():
 
 
     # ========================================================
-    # FINAL
+    # FINAL CHECK
     # ========================================================
-
-    if not output_file.exists():
-
-        raise RuntimeError(
-            "Video was not generated."
-        )
-
-
-    size_mb = (
-        output_file.stat().st_size
-        /
-        (1024 * 1024)
-    )
-
 
     print()
     print(
@@ -2160,7 +2241,47 @@ def main():
     )
 
     print(
-        "       VIDEO CREATED SUCCESSFULLY"
+        "CHECKING 3 GENERATED VIDEOS"
+    )
+
+    print(
+        "============================================"
+    )
+
+
+    for file in generated_files:
+
+        if not file.exists():
+
+            raise RuntimeError(
+                f"Missing video:\n{file}"
+            )
+
+
+        size_mb = (
+            file.stat().st_size
+            /
+            (1024 * 1024)
+        )
+
+
+        print(
+            f"{file.name}: "
+            f"{size_mb:.2f} MB"
+        )
+
+
+    # ========================================================
+    # SUMMARY
+    # ========================================================
+
+    print()
+    print(
+        "============================================"
+    )
+
+    print(
+        "ALL 3 VIDEOS CREATED SUCCESSFULLY"
     )
 
     print(
@@ -2168,33 +2289,18 @@ def main():
     )
 
     print(
-        "File:",
-        output_file
+        "Video 1:",
+        generated_files[0].name
     )
 
     print(
-        "Size:",
-        f"{size_mb:.2f} MB"
+        "Video 2:",
+        generated_files[1].name
     )
 
     print(
-        "Resolution:",
-        f"{WIDTH}x{HEIGHT}"
-    )
-
-    print(
-        "Duration:",
-        f"{VIDEO_SECONDS} seconds"
-    )
-
-    print(
-        "RTL engine:",
-        "Pillow RAQM"
-    )
-
-    print(
-        "Translation:",
-        "QuranEnc / Muhammad Junagarhi"
+        "Video 3:",
+        generated_files[2].name
     )
 
     print(
