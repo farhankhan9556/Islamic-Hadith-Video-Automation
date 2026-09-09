@@ -16,23 +16,18 @@ permissions:
   contents: write
 
 jobs:
+
   create-video:
 
     runs-on: ubuntu-latest
 
     steps:
 
-      # --------------------------------------------------
-      # 1. Checkout repository
-      # --------------------------------------------------
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # --------------------------------------------------
-      # 2. Install system packages
-      # --------------------------------------------------
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -42,83 +37,79 @@ jobs:
             libfribidi-dev \
             libharfbuzz-dev
 
-      # --------------------------------------------------
-      # 3. Setup Python
-      # --------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      # --------------------------------------------------
-      # 4. Install Python packages
-      # --------------------------------------------------
       - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # --------------------------------------------------
-      # 5. Verify required project files
-      # --------------------------------------------------
       - name: Verify project files
         run: |
+          set -e
+
           test -f create_video.py
           test -f download_hadith_data.py
           test -f used_hadith.json
 
           test -f fonts/NotoNastaliqUrdu-Regular.ttf
-
           test -f audio/islamic_background.mp3
 
           echo "All required project files are present."
 
-      # --------------------------------------------------
-      # 6. Verify Urdu font and RAQM
-      # --------------------------------------------------
       - name: Verify Urdu font and RAQM
         run: |
           python - <<'PY'
           from PIL import ImageFont, features
 
-          print("RAQM available:", features.check("raqm"))
+          print(
+              "RAQM available:",
+              features.check("raqm")
+          )
 
           if not features.check("raqm"):
               raise SystemExit(
                   "ERROR: Pillow RAQM support is not available."
               )
 
-          font = ImageFont.truetype(
+          ImageFont.truetype(
               "fonts/NotoNastaliqUrdu-Regular.ttf",
               72
           )
 
-          print("Noto Nastaliq Urdu font loaded successfully.")
-          print("Font bbox:", font.getbbox("پاکستان"))
+          print(
+              "Urdu font loaded successfully."
+          )
           PY
 
-      # --------------------------------------------------
-      # 7. Download Hadith data from HadithAPI.com
-      # --------------------------------------------------
-      - name: Prepare Hadith database
+      - name: Download Sahih Bukhari and Sahih Muslim
         env:
           HADITH_API_KEY: ${{ secrets.HADITH_API_KEY }}
+
         run: |
+
           if [ -z "$HADITH_API_KEY" ]; then
             echo "ERROR: HADITH_API_KEY GitHub Secret is missing."
             exit 1
           fi
 
-          echo "HADITH_API_KEY is available."
           python download_hadith_data.py
 
-      # --------------------------------------------------
-      # 8. Create video
-      # --------------------------------------------------
+          test -s data/urd-bukhari.json
+          test -s data/urd-muslim.json
+
+          echo "Hadith databases created successfully."
+
       - name: Create Islamic video
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+
         run: |
+
           if [ -z "$PEXELS_API_KEY" ]; then
             echo "ERROR: PEXELS_API_KEY GitHub Secret is missing."
             exit 1
@@ -126,29 +117,59 @@ jobs:
 
           python create_video.py
 
-      # --------------------------------------------------
-      # 9. Upload generated video and metadata
-      # --------------------------------------------------
+      - name: Validate output
+        run: |
+
+          set -e
+
+          VIDEO_FILE=$(find output \
+            -maxdepth 1 \
+            -name "*.mp4" \
+            -print \
+            -quit)
+
+          if [ -z "$VIDEO_FILE" ]; then
+            echo "ERROR: No MP4 video was generated."
+            exit 1
+          fi
+
+          test -f output/metadata.json
+          test -f output/youtube_title.txt
+          test -f output/youtube_description.txt
+
+          echo "Output validation passed."
+          echo "Generated video:"
+          echo "$VIDEO_FILE"
+
       - name: Upload generated files
         uses: actions/upload-artifact@v4
+
         with:
           name: islamic-video-${{ github.run_number }}
           path: output/
           if-no-files-found: error
+          retention-days: 7
 
-      # --------------------------------------------------
-      # 10. Save used Hadith list
-      # --------------------------------------------------
       - name: Save used Hadith list
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add used_hadith.json
 
           if git diff --cached --quiet; then
+
             echo "No Hadith changes."
+
           else
-            git commit -m "Update used Hadith list"
+
+            git commit \
+              -m "Update used Hadith list"
+
             git push
+
           fi
