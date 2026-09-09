@@ -1,10 +1,13 @@
 name: Create 3 Islamic Dua Videos
 
 on:
+
   workflow_dispatch:
 
   schedule:
+    # 09:00 UAE = 05:00 UTC
     - cron: "0 5 * * *"
+
 
 jobs:
 
@@ -31,6 +34,7 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v5
+
         with:
           python-version: "3.11"
 
@@ -39,25 +43,35 @@ jobs:
       # SYSTEM PACKAGES
       # ======================================================
 
-      - name: Install FFmpeg and Arabic/Urdu font support
+      - name: Install FFmpeg and Arabic Urdu support
         run: |
 
           sudo apt-get update
 
           sudo apt-get install -y \
             ffmpeg \
+            unzip \
             fonts-noto-core \
             fonts-noto-extra \
             libraqm-dev \
             libfribidi-dev
 
-          echo "FFmpeg:"
+          echo "======================================"
+          echo "FFmpeg"
+          echo "======================================"
+
           ffmpeg -version | head -1
 
-          echo "Arabic font:"
+          echo "======================================"
+          echo "Arabic Font"
+          echo "======================================"
+
           fc-match "Noto Naskh Arabic"
 
-          echo "Urdu font:"
+          echo "======================================"
+          echo "Urdu Font"
+          echo "======================================"
+
           fc-match "Noto Nastaliq Urdu"
 
 
@@ -74,10 +88,10 @@ jobs:
 
 
       # ======================================================
-      # CHECK PROJECT
+      # PROJECT CHECK
       # ======================================================
 
-      - name: Check project files
+      - name: Check required project files
         run: |
 
           echo "Checking project..."
@@ -90,20 +104,24 @@ jobs:
 
           test -f audio/islamic_background.mp3
 
-          echo "All required project files found."
+          test -f fonts/NotoNastaliqUrdu-Regular.ttf
+
+          echo ""
+          echo "All required files found."
 
 
       # ======================================================
-      # CREATE FOLDERS
+      # PREPARE
       # ======================================================
 
       - name: Prepare folders
         run: |
 
           mkdir -p output
+
           mkdir -p work
 
-          echo "Folders prepared."
+          echo "Folders ready."
 
 
       # ======================================================
@@ -111,6 +129,7 @@ jobs:
       # ======================================================
 
       - name: Create 3 Islamic Dua Videos
+
         env:
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
@@ -121,23 +140,26 @@ jobs:
 
 
       # ======================================================
-      # CHECK OUTPUT
+      # VALIDATE
       # ======================================================
 
-      - name: Validate final ZIP
+      - name: Validate ONE ZIP output
         run: |
 
-          echo "Output directory:"
-          ls -lah output/
-
-          echo ""
-          echo "ZIP files:"
+          echo "======================================"
+          echo "OUTPUT DIRECTORY"
+          echo "======================================"
 
           find output \
-            -maxdepth 1 \
+            -maxdepth 2 \
             -type f \
-            -name "*.zip" \
-            -print
+            -printf "%p\n"
+
+
+          echo ""
+          echo "======================================"
+          echo "CHECK ZIP"
+          echo "======================================"
 
           ZIP_COUNT=$(find output \
             -maxdepth 1 \
@@ -145,13 +167,20 @@ jobs:
             -name "*.zip" \
             | wc -l)
 
-          echo ""
           echo "ZIP count: $ZIP_COUNT"
 
+
           if [ "$ZIP_COUNT" -ne 1 ]; then
-            echo "ERROR: Expected exactly ONE ZIP artifact."
+
+            echo ""
+            echo "ERROR:"
+            echo "Expected exactly ONE ZIP."
+            echo ""
+
             exit 1
+
           fi
+
 
           ZIP_FILE=$(find output \
             -maxdepth 1 \
@@ -159,22 +188,51 @@ jobs:
             -name "*.zip" \
             -print -quit)
 
+
           echo ""
-          echo "ZIP:"
+          echo "ZIP FILE:"
           echo "$ZIP_FILE"
 
-          test -f "$ZIP_FILE"
 
           echo ""
-          echo "ZIP CONTENTS:"
+          echo "======================================"
+          echo "ZIP CONTENTS"
+          echo "======================================"
+
           unzip -l "$ZIP_FILE"
+
+
+          echo ""
+          echo "======================================"
+          echo "CHECK VIDEOS"
+          echo "======================================"
+
+          VIDEO_COUNT=$(unzip -Z1 "$ZIP_FILE" \
+            | grep -E '\.mp4$' \
+            | wc -l)
+
+          echo "Videos inside ZIP: $VIDEO_COUNT"
+
+
+          if [ "$VIDEO_COUNT" -ne 3 ]; then
+
+            echo "ERROR: ZIP must contain exactly 3 MP4 files."
+
+            exit 1
+
+          fi
+
+
+          echo ""
+          echo "Validation successful."
 
 
       # ======================================================
       # UPLOAD ONLY ONE ARTIFACT
       # ======================================================
 
-      - name: Upload 3 Videos ZIP
+      - name: Upload ONE ZIP artifact
+
         uses: actions/upload-artifact@v4
 
         with:
@@ -201,9 +259,19 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
+
           git add used_duas.json
 
-          git diff --cached --quiet \
-            || git commit -m "Update used Dua list"
 
-          git push
+          if git diff --cached --quiet; then
+
+            echo "No used Dua changes."
+
+          else
+
+            git commit \
+              -m "Update used Dua list"
+
+            git push
+
+          fi
