@@ -1,0 +1,174 @@
+name: Create Islamic Hadith Videos
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 5 * * *'
+
+permissions:
+  contents: write
+
+env:
+  # Official Sunnah.com API collection names.
+  HADITH_COLLECTIONS: bukhari,muslim
+  # The script uses only Arabic + Urdu records returned by the API.
+  HADITH_ARABIC_LANGS: ar,ara,arabic
+  HADITH_URDU_LANGS: ur,urd,urdu
+  # Keep requests below common API rate limits.
+  SUNNAH_API_REQUEST_DELAY: '0.6'
+  RANDOM_HADITH_ATTEMPTS: '30'
+
+jobs:
+  create-hadith-videos:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-noto-core \
+            fonts-noto-extra \
+            fonts-noto-naskh-arabic \
+            libraqm-dev \
+            libfribidi-dev \
+            fontconfig \
+            unzip
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install requests Pillow
+
+      - name: Verify required files
+        run: |
+          test -f create_video.py
+          test -f audio/islamic_background.mp3
+          test -f fonts/NotoNastaliqUrdu-Regular.ttf
+          test -f used_hadith.json || echo '[]' > used_hadith.json
+          python -m py_compile create_video.py
+          ffmpeg -version | head -n 1
+          fc-match NotoNaskhArabic
+          fc-match NotoSans
+
+      - name: Verify Sunnah.com API access
+        env:
+          SUNNAH_API_KEY: ${{ secrets.SUNNAH_API_KEY }}
+        run: |
+          if [ -z "$SUNNAH_API_KEY" ]; then
+            echo "ERROR: SUNNAH_API_KEY secret is missing."
+            echo "Add it at: Settings > Secrets and variables > Actions > Secrets."
+            exit 1
+          fi
+
+          python - <<'PY'
+          import os
+          import requests
+
+          key = os.environ["SUNNAH_API_KEY"]
+          url = "https://api.sunnah.com/v1/hadiths"
+
+          r = requests.get(
+              url,
+              params={"collection": "bukhari", "limit": 1, "page": 1},
+              headers={
+                  "X-API-Key": key,
+                  "Accept": "application/json",
+                  "User-Agent": "Islamic-Hadith-Video-Automation/2.0 (GitHub Actions)",
+              },
+              timeout=60,
+          )
+
+          print("Sunnah.com API HTTP status:", r.status_code)
+
+          if r.status_code != 200:
+              print(r.text[:1000])
+              raise SystemExit("Sunnah.com API access test failed.")
+
+          data = r.json()
+          if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+              raise SystemExit("Sunnah.com API returned an unexpected response format.")
+
+          print("Sunnah.com API access test passed.")
+          print("Total Bukhari records reported:", data.get("total"))
+          PY
+
+      - name: Generate 3 Hadith videos
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          SUNNAH_API_KEY: ${{ secrets.SUNNAH_API_KEY }}
+        run: |
+          python create_video.py
+
+      - name: Validate ONE ZIP output
+        shell: bash
+        run: |
+          shopt -s nullglob
+          zips=(output/*.zip)
+
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "Expected exactly 1 ZIP in output/"
+            printf '%s\n' "${zips[@]}"
+            exit 1
+          fi
+
+          echo "ZIP: ${zips[0]}"
+
+          rm -rf /tmp/hadith_zip_check
+          mkdir -p /tmp/hadith_zip_check
+          unzip -q "${zips[0]}" -d /tmp/hadith_zip_check
+
+          mp4_count=$(find /tmp/hadith_zip_check -maxdepth 1 -type f -name '*.mp4' | wc -l)
+          social_count=$(find /tmp/hadith_zip_check -maxdepth 1 -type f -name '*_social_media.txt' | wc -l)
+          json_count=$(find /tmp/hadith_zip_check -maxdepth 1 -type f -name '*.json' | wc -l)
+
+          if [ "$mp4_count" -ne 3 ]; then
+            echo "Expected exactly 3 MP4 files; found $mp4_count"
+            exit 1
+          fi
+
+          if [ "$social_count" -ne 3 ]; then
+            echo "Expected exactly 3 social metadata files; found $social_count"
+            exit 1
+          fi
+
+          if [ "$json_count" -ne 3 ]; then
+            echo "Expected exactly 3 JSON metadata files; found $json_count"
+            exit 1
+          fi
+
+          echo "ZIP validation passed: 3 MP4 + 3 social files + 3 JSON files."
+
+      - name: Upload ONE ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Islamic-Hadith-3-Videos-${{ github.run_number }}
+          path: output/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Commit updated used_hadith.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add used_hadith.json
+          if git diff --cached --quiet; then
+            echo "No used_hadith.json changes to commit."
+          else
+            git commit -m "Update used Hadith list"
+            git push
+          fi
